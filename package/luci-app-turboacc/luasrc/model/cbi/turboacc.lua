@@ -15,7 +15,7 @@ s.anonymous = true
 if nixio.fs.access("/etc/init.d/nss") then
 nss_enabled = s:option(Flag, "nss_enabled", translate("NSS 硬件卸载"))
 nss_enabled.default = 1
-nss_enabled.description = translate("使用 NSS 数据面卸载（有线 + Wi-Fi）。与软件/硬件流卸载互斥；修改后需重启生效。")
+nss_enabled.description = translate("使用 NSS 数据面卸载（有线 + Wi-Fi）。开启后会强制关闭：软件流量分载（Software flow offloading）、硬件/Shortcut-FE 流卸载、全锥形 NAT（含 IPv6），这些选项在本页不可选；SQM 的队列脚本与 Qdisc 只能选 nss-edma。修改后需重启生效。")
 end
 
 -- nftables: nft_flow_offload is built-in mod
@@ -59,10 +59,12 @@ if nixio.fs.access("/lib/modules/" .. kernel_version .. "/nft_fullcone.ko") then
 fullcone_nat = s:option(Flag, "fullcone_nat", translate("FullCone NAT"))
 fullcone_nat.default = 0
 fullcone_nat.description = translate("Using FullCone NAT can improve gaming performance effectively")
+fullcone_nat:depends("nss_enabled", 0)
 fullcone6 = s:option(Flag, "fullcone6", translate("IPv6 Full Cone NAT"))
 fullcone6.default = 0
 fullcone6.description = translate("Enabling IPv6 Full Cone NAT adds an extra layer of NAT to IPv6. In IPv6, if you obtain an IPv6 prefix through IPv6 Prefix Delegation, each device can be assigned a public IPv6 address, eliminating the need for IPv6 Full Cone NAT.")
 fullcone6:depends("fullcone_nat", 1)
+fullcone6:depends("nss_enabled", 0)
 end
 
 if nixio.fs.access("/lib/modules/" .. kernel_version .. "/tcp_bbr.ko") then
