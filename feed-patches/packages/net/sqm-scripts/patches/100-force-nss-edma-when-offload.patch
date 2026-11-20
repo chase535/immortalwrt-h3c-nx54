@@ -1,6 +1,6 @@
 --- a/src/run-openwrt.sh
-+++ b/src/run-openwrt.sh
-@@ -66,6 +66,19 @@
+--- b/src/run-openwrt.sh
+@@ -66,6 +66,23 @@
      export TARGET=$(config_get "$section" target)
      export QDISC=$(config_get "$section" qdisc)
      export SCRIPT=$(config_get "$section" script)
@@ -16,6 +16,10 @@
 +            sqm_log "NSS offload is enabled: using nss-edma.qos instead of ${SCRIPT}"
 +        SCRIPT=nss-edma.qos
 +        QDISC=nss-edma
++    elif [ "${SCRIPT}" = "nss-edma.qos" ]; then
++        sqm_log "NSS offload is disabled: falling back to piece_of_cake.qos"
++        SCRIPT=piece_of_cake.qos
++        QDISC=cake
 +    fi
      export USE_MQ=$(config_get "$section" use_mq)
  
