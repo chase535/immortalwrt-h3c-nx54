@@ -1,3 +1,6 @@
 # add your custom package feeds here
 #
-# http://www.example.com/path/to/files/packages.adb
+# ImmortalWrt snapshots: the base feed only carries the packages the images
+# needs at build time; the userland packages (iperf3, luci apps, ...) live in
+# the packages feed. Point at it so `apk add <pkg>` works on a fresh image.
+https://downloads.immortalwrt.org/snapshots/packages/aarch64_cortex-a53/packages/packages.adb
