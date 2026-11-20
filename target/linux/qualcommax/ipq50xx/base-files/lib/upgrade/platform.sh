@@ -3,7 +3,7 @@
 PART_NAME=firmware
 REQUIRE_IMAGE_METADATA=1
 
-RAMFS_COPY_BIN='dumpimage fw_printenv fw_setenv head seq'
+RAMFS_COPY_BIN='cmp dumpimage fw_printenv fw_setenv head seq'
 RAMFS_COPY_DATA='/etc/fw_env.config /var/lock/fw_printenv.lock'
 
 fritzbox_remove_oem_ubi_volumes() {
@@ -36,6 +36,24 @@ xiaomi_initramfs_prepare() {
 	ubiformat /dev/mtd$kern_mtdnum -y
 }
 
+# tplink_set_boot_idx <slot>: point TP-Link's U-Boot at a rootfs slot.
+# Some units ship with a U-Boot environment whose CRC is bad (seen on an
+# Archer AX55 v4); their U-Boot then runs its built-in defaults. fw_setenv
+# replaces such an environment with the uboot-envtools defaults, whose
+# bootcmd ("run distro_bootcmd") this U-Boot does not have, and the board
+# stops at the U-Boot prompt after the upgrade. Store the stock boot
+# command together with the slot in that case.
+tplink_set_boot_idx() {
+	local script=/tmp/tp_boot_idx.fwenv
+
+	echo "tp_boot_idx $1" > "$script"
+	if fw_printenv 2>&1 >/dev/null | grep -q 'Bad CRC'; then
+		echo "U-Boot environment has a bad CRC, writing bootcmd bootipq as well"
+		echo "bootcmd bootipq" >> "$script"
+	fi
+	fw_setenv -s "$script"
+}
+
 remove_oem_ubi_volume() {
 	local oem_volume_name="$1"
 	local oem_ubivol
@@ -59,6 +77,81 @@ remove_oem_ubi_volume() {
 	fi
 }
 
+cudy_p5_set_bootslot() {
+	local bootconfig_idx
+	local bootconfig1_idx
+	local image="/tmp/cudy-p5-bootconfig.bin"
+	local verify="/tmp/cudy-p5-bootconfig.verify"
+	local idx
+
+	bootconfig_idx="$(find_mtd_index "0:bootconfig")"
+	bootconfig1_idx="$(find_mtd_index "0:bootconfig1")"
+
+	if [ -z "$bootconfig_idx" ] || [ -z "$bootconfig1_idx" ]; then
+		echo "cannot find Cudy P5 bootconfig partitions"
+		return 1
+	fi
+
+	# Preserve the complete 256 KiB partition, including any unknown data
+	# outside the 336-byte Qualcomm bootconfig structure.
+	dd if="/dev/mtd$bootconfig_idx" of="$image" bs=128k count=2 2>/dev/null || {
+		echo "failed to read bootconfig"
+		return 1
+	}
+
+	validate_bootconfig_magic "$image" || return 1
+	set_bootconfig_primaryboot "$image" rootfs 0 || return 1
+
+	if [ "$(get_bootconfig_primaryboot "$image" rootfs)" != "0" ]; then
+		echo "failed to prepare rootfs_1 boot selection"
+		return 1
+	fi
+
+	# Update and verify the redundant copy first, then the primary copy.
+	for idx in "$bootconfig1_idx" "$bootconfig_idx"; do
+		mtd write "$image" "/dev/mtd$idx" 2>/dev/null || {
+			echo "failed to write /dev/mtd$idx"
+			return 1
+		}
+
+		dd if="/dev/mtd$idx" of="$verify" bs=128k count=2 2>/dev/null || {
+			echo "failed to read back /dev/mtd$idx"
+			return 1
+		}
+
+		cmp -s "$image" "$verify" || {
+			echo "bootconfig verification failed for /dev/mtd$idx"
+			return 1
+		}
+	done
+
+	rm -f "$image" "$verify"
+	return 0
+}
+
+cudy_p5_do_upgrade() {
+	# The DTS exposes the physical rootfs_1 slot as "rootfs" because
+	# stock U-Boot hard-codes ubi.mtd=rootfs in the kernel command line.
+	CI_UBIPART="rootfs"
+
+	remove_oem_ubi_volume ubi_rootfs
+	sync
+
+	if ! nand_do_flash_file "$1"; then
+		echo "failed to write OpenWrt rootfs slot"
+		nand_do_upgrade_failed
+		return 1
+	fi
+
+	if ! cudy_p5_set_bootslot; then
+		echo "OpenWrt rootfs slot was written, but boot slot selection failed"
+		nand_do_upgrade_failed
+		return 1
+	fi
+
+	nand_do_upgrade_success
+}
+
 linksys_bootconfig_set_primaryboot() {
 	local partname=$1
 	local tempfile
@@ -73,7 +166,7 @@ linksys_bootconfig_set_primaryboot() {
 	# No need to cleanup as files in /tmp will be removed upon reboot
 	tempfile=/tmp/mtd"$mtdidx".bin
 	dd if=/dev/mtd"$mtdidx" of="$tempfile" bs=1 count=336 2>/dev/null
-	[ $? -ne 0 ] || [ ! -f "$tempfile" ]&& {
+	[ $? -ne 0 ] || [ ! -f "$tempfile" ] && {
 		echo "failed to create a temp copy of /dev/mtd$mtdidx"
 		return 1
 	}
@@ -83,7 +176,7 @@ linksys_bootconfig_set_primaryboot() {
 		echo "failed to toggle primaryboot on 0:HLOS part"
 		return 1
 	}
-	
+
 	set_bootconfig_primaryboot "$tempfile" "rootfs" $2
 	[ $? -ne 0 ] && {
 		echo "failed to toggle primaryboot for rootfs part"
@@ -134,6 +227,111 @@ linksys_bootconfig_pre_upgrade() {
 	fi
 }
 
+#
+# TP-Link EX511 v2 A/B slot handling.
+#
+# The active slot is selected by the QCA bootconfig table in 0:BOOTCONFIG /
+# 0:BOOTCONFIG1, not by a U-Boot environment variable: this U-Boot exposes no
+# boot_part, and 0:APPSBLENV ships erased, so its environment must be neither
+# trusted nor written. OpenWrt's shared bootconfig.sh parses this board's table
+# unmodified (magic OK, numparts 8, rootfs at index 5, 0:HLOS at index 4).
+#
+# Nothing lives past the 336-byte table in either partition -- both are 0xFF to
+# the end -- so reading 336 bytes, editing and writing back loses nothing.
+#
+tplink_ex511_set_primaryboot() {
+	local partname="$1"
+	local value="$2"
+	local mtdidx tempfile
+
+	mtdidx=$(find_mtd_index "$partname")
+	[ -n "$mtdidx" ] || {
+		echo "cannot find mtd index for $partname"
+		return 1
+	}
+
+	# Deliberately not derived from $partname: tr is not among the binaries
+	# stage2 copies into the sysupgrade ramfs, so a name built with it would
+	# come out empty once this runs from a flashed system rather than from
+	# initramfs. The two calls are sequential, so one scratch file is enough.
+	tempfile="/tmp/bootconfig_write.bin"
+	dd if=/dev/mtd"$mtdidx" of="$tempfile" bs=1 count=336 2>/dev/null || {
+		echo "failed to read $partname"
+		return 1
+	}
+
+	# Keep 0:HLOS in step with rootfs. The kernel actually lives inside the
+	# rootfs UBI on this board, but stock carries both entries and the
+	# in-tree ipq50xx caller (linksys,mx6200) flips both, so match that.
+	set_bootconfig_primaryboot "$tempfile" "0:HLOS" "$value" || return 1
+	set_bootconfig_primaryboot "$tempfile" "rootfs" "$value" || return 1
+
+	mtd write "$tempfile" /dev/mtd"$mtdidx" || {
+		echo "failed to write $partname"
+		return 1
+	}
+}
+
+tplink_ex511_pre_upgrade() {
+	local mtdidx tempfile cur
+
+	# Always install into slot 0, and make sure the table points there.
+	#
+	# The A/B machinery itself works: U-Boot does honour this table. With
+	# primaryboot flipped to 1 it loaded the kernel out of rootfs_1 --
+	# confirmed on hardware by the UBI image sequence number in its own log
+	# matching the one ubiformat had just written to that partition.
+	#
+	# What does not work is the kernel side. U-Boot passes
+	# "ubi.mtd=rootfs" on the command line, naming the active slot in its
+	# own swapped view of the flash, while this board's DTS declares
+	# fixed-partitions and so always resolves "rootfs" to the first slot.
+	# Booting slot 1 therefore starts our kernel with stock's UBI attached
+	# and hangs before init:
+	#
+	#   ubi0: attached mtd13 (name "rootfs", size 36 MiB)
+	#   Waiting for root device /dev/ubiblock0_1...
+	#
+	# Slot 1 only becomes usable once the kernel can learn the active slot
+	# at runtime. Until then pin installs to slot 0. Flipping a board that
+	# an earlier attempt left pointing at slot 1 is part of the job, so the
+	# table is corrected rather than merely inspected.
+	CI_UBIPART="rootfs"
+
+	mtdidx=$(find_mtd_index "0:BOOTCONFIG")
+	[ -n "$mtdidx" ] || {
+		echo "cannot find 0:BOOTCONFIG -- refusing to upgrade"
+		return 1
+	}
+
+	tempfile=/tmp/bootconfig_read.bin
+	dd if=/dev/mtd"$mtdidx" of="$tempfile" bs=1 count=336 2>/dev/null || {
+		echo "failed to read 0:BOOTCONFIG -- refusing to upgrade"
+		return 1
+	}
+
+	validate_bootconfig_magic "$tempfile" || {
+		echo "0:BOOTCONFIG holds no valid table -- refusing to upgrade"
+		return 1
+	}
+
+	cur=$(get_bootconfig_primaryboot "$tempfile" "rootfs")
+	case "$cur" in
+	0)
+		echo "upgrading into rootfs; boot table already selects it"
+		;;
+	1)
+		echo "upgrading into rootfs; moving the boot table back to it"
+		tplink_ex511_set_primaryboot "0:BOOTCONFIG" 0 || return 1
+		tplink_ex511_set_primaryboot "0:BOOTCONFIG1" 0 || return 1
+		;;
+	*)
+		echo "unexpected primaryboot value '$cur' -- refusing to upgrade"
+		return 1
+		;;
+	esac
+}
+
 linksys_mx_pre_upgrade() {
 	local setenv_script="/tmp/fw_env_upgrade"
 
@@ -173,7 +371,15 @@ linksys_mx_pre_upgrade() {
 }
 
 platform_check_image() {
-	return 0;
+	case "$(board_name)" in
+	cudy,p5|\
+	xiaomi,mi-router-ax3000t-v2)
+		nand_do_platform_check "$(board_name)" "$1"
+		;;
+	*)
+		return 0
+		;;
+	esac
 }
 
 platform_pre_upgrade() {
@@ -181,7 +387,8 @@ platform_pre_upgrade() {
 	avm,fritzbox-4050)
 		fritzbox_remove_oem_ubi_volumes
 		;;
-	xiaomi,ax6000)
+	xiaomi,ax6000|\
+	xiaomi,mi-router-ax3000t-v2)
 		xiaomi_initramfs_prepare
 		;;
 	esac
@@ -196,6 +403,9 @@ platform_do_upgrade() {
 		CI_KERNPART="fit1"
 		nand_do_flash_file "$1" || nand_do_upgrade_failed
 		nand_do_upgrade_success
+		;;
+	cudy,p5)
+		cudy_p5_do_upgrade "$1"
 		;;
 	cmcc,mr3000d-ci|\
 	cmcc,pz-l8|\
@@ -228,6 +438,24 @@ platform_do_upgrade() {
 		remove_oem_ubi_volume wifi_fw
 		glinet_do_upgrade "$1"
 		;;
+	h3c,magic-bx54-eu|\
+	h3c,magic-nx30|\
+	h3c,magic-nx54|\
+	h3c,magic-rc3000-v1|\
+	h3c,magic-rc3000-v2|\
+	h3c,magic-rc3000-v3)
+		# Two rootfs slots; the other one usually keeps the stock
+		# firmware and must not be touched. Rewrite the running slot,
+		# which the boot loader names on the command line (the SBL
+		# renames the SMEM partitions after a slot switch, so the
+		# running slot is not always "rootfs").
+		CI_UBIPART="$(sed -n 's/.*ubi\.mtd=\([^ ]*\).*/\1/p' /proc/cmdline)"
+		[ -n "$CI_UBIPART" ] || {
+			echo "cannot tell the running slot (no ubi.mtd= on the command line)"
+			nand_do_upgrade_failed
+		}
+		nand_do_upgrade "$1"
+		;;
 	linksys,mr2000|\
 	linksys,mr5500|\
 	linksys,mx2000|\
@@ -240,13 +468,6 @@ platform_do_upgrade() {
 	linksys,mx6200)
 		linksys_bootconfig_pre_upgrade "$1"
 		remove_oem_ubi_volume ubi_rootfs
-		nand_do_upgrade "$1"
-		;;
-	liteon,wpx8324)
-		CI_UBIPART="rootfs"
-		remove_oem_ubi_volume ubi_rootfs
-		remove_oem_ubi_volume bt_fw
-		remove_oem_ubi_volume wifi_fw
 		nand_do_upgrade "$1"
 		;;
 	mercusys,mr80x-v2)
@@ -286,14 +507,31 @@ platform_do_upgrade() {
 		sync
 		nand_do_flash_file "$1" || nand_do_upgrade_failed
 		if [ -z "$UPGRADE_OPT_USE_CURR_PART" ]; then
-			fw_setenv tp_boot_idx "$newtp" || {
+			tplink_set_boot_idx "$newtp" || {
 				echo "failed to set tp_boot_idx"
 				nand_do_upgrade_failed
 			}
 		fi
 		nand_do_upgrade_success
 		;;
+    tplink,mx515v-v1)
+		# rootfs_1 (mtd18) is kept as a stock-firmware fallback and must
+		# never be written by sysupgrade. Unlike archer-ax55-v1/
+		# eap650-outdoor-v1/re700x there is no ping-pong on tp_boot_idx:
+		# every upgrade goes to rootfs (mtd17).
+		CI_UBIPART="rootfs"
+		tplink_set_boot_idx 0 || {
+			echo "failed to set tp_boot_idx 0"
+			return 1
+		}
+		remove_oem_ubi_volume bt_fw
+		remove_oem_ubi_volume ubi_rootfs
+		remove_oem_ubi_volume kernel
+		nand_do_upgrade "$1"
+		;;
+	tplink,archer-ax53-v2|\
 	tplink,archer-ax55-v1|\
+	tplink,archer-ax58-v2|\
 	tplink,eap650-outdoor-v1|\
 	tplink,re700x)
 		# Dual boot: install into the inactive rootfs/rootfs_1 slot,
@@ -308,7 +546,7 @@ platform_do_upgrade() {
 			idx=0
 			CI_UBIPART="rootfs"
 		fi
-		fw_setenv tp_boot_idx $idx || {
+		tplink_set_boot_idx $idx || {
 			echo "failed to set tp_boot_idx $idx"
 			return 1
 		}
@@ -333,7 +571,46 @@ platform_do_upgrade() {
 		remove_oem_ubi_volume wifi_fw
 		nand_do_upgrade "$1"
 		;;
+	xiaomi,cr8806|\
+	xiaomi,ra80)
+		# Keep the stock dual-boot layout: upgrade the slot we are
+		# running from and leave the other slot untouched.
+		# bootmiwifi boots slot flag_last_success, or the other one
+		# if flag_ota_reboot=1 (flag_boot_rootfs is not used).
+		local slot=0
+
+		CI_UBIPART="rootfs"
+		if grep -q 'ubi.mtd=rootfs_1' /proc/cmdline; then
+			CI_UBIPART="rootfs_1"
+			slot=1
+		fi
+		printf '%s\n' \
+			"flag_last_success $slot" \
+			"flag_ota_reboot 0" \
+			"flag_try_sys1_failed 0" \
+			"flag_try_sys2_failed 0" \
+			"flag_boot_rootfs $slot" \
+			"boot_wait on" \
+			"uart_en 1" > /tmp/xiaomi-env
+		fw_setenv -s /tmp/xiaomi-env
+		nand_do_upgrade "$1"
+		;;
+	xiaomi,redmi-ax3000-ubootmod)
+		# Enforce single partition layout by locking boot to slot 0
+		printf '%s\n' \
+			"flag_last_success 0" \
+			"flag_ota_reboot 0" \
+			"flag_try_sys1_failed 0" \
+			"flag_try_sys2_failed 0" \
+			"flag_boot_rootfs 0" \
+			"boot_wait on" \
+			"uart_en 1" > /tmp/xiaomi-env
+		fw_setenv -s /tmp/xiaomi-env
+		CI_UBIPART="rootfs"
+		nand_do_upgrade "$1"
+		;;
 	xiaomi,ax6000|\
+	xiaomi,mi-router-ax3000t-v2|\
 	xiaomi,redmi-ax5400)
 		# Make sure that UART is enabled
 		fw_setenv boot_wait on
@@ -341,7 +618,13 @@ platform_do_upgrade() {
 
 		# Enforce single partition.
 		fw_setenv flag_boot_rootfs 0
-		fw_setenv flag_last_success 0
+		# The AX3000T v2's loader wants the boot confirmed, as its
+		# bootcount script does on every boot: start out that way
+		if [ "$(board_name)" = "xiaomi,mi-router-ax3000t-v2" ]; then
+			fw_setenv flag_last_success 1
+		else
+			fw_setenv flag_last_success 0
+		fi
 		fw_setenv flag_boot_success 1
 		fw_setenv flag_try_sys1_failed 8
 		fw_setenv flag_try_sys2_failed 8
@@ -352,6 +635,7 @@ platform_do_upgrade() {
 		CI_DATA_UBIPART="rootfs"
 		nand_do_upgrade "$1"
 		;;
+	netgear,wax630e|\
 	xunison,exigo-hub-d50-5g|\
 	yuncore,ax830|\
 	yuncore,ax850|\
@@ -360,6 +644,28 @@ platform_do_upgrade() {
 		remove_oem_ubi_volume ubi_rootfs
 		remove_oem_ubi_volume bt_fw
 		remove_oem_ubi_volume wifi_fw
+		nand_do_upgrade "$1"
+		;;
+	tplink,ex511-v2)
+		# Selects the inactive slot and sets CI_UBIPART to it. The UBI
+		# container is the "rootfs"/"rootfs_1" partition, never the
+		# default "ubi": without CI_UBIPART set, both
+		# remove_oem_ubi_volume and nand_do_upgrade look up an mtd
+		# partition that does not exist here, so the volume removals
+		# silently no-op and the upgrade fails.
+		tplink_ex511_pre_upgrade "$1" || return 1
+		# Stock UBI holds kernel + bt_fw + ubi_rootfs. Clearing them is
+		# a no-op on the erased slot and required on the stock one.
+		remove_oem_ubi_volume bt_fw
+		remove_oem_ubi_volume ubi_rootfs
+		remove_oem_ubi_volume kernel
+		nand_do_upgrade "$1"
+		;;
+	ruijie,rg-ma3063)
+		# The stock bootipq loader picks the A/B slot from BOOTCONFIG,
+		# not from U-Boot env: always rewrite the OpenWrt "rootfs"
+		# partition in place.
+		CI_UBIPART="rootfs"
 		nand_do_upgrade "$1"
 		;;
 	zte,t5400)
