@@ -1,5 +1,6 @@
 DTS_DIR := $(DTS_DIR)/qcom
 DEVICE_VARS += AVM_CONTAINER_CONFIG BOOT_SCRIPT MERCUSYS_SUPPORT_STRING
+DEVICE_VARS += H3C_FIT_CONFIGS
 
 define Build/fit-avm
 	$(call Build/fit-its,$(1))
@@ -57,6 +58,64 @@ define Build/tplink-re700x-factory
 	$(TOPDIR)/scripts/tplink-re700x-factory.py --rootfs $@ --output $@.factory
 	mv $@.factory $@
 endef
+
+# H3C web upgrade image: a FIT whose only image is the UBI ("ubi-*"),
+# behind the header checked by the stock web interface.
+define Build/h3c-web-fit
+	echo '/dts-v1/; / { description = "OpenWrt"; #address-cells = <1>; \
+		images { ubi-openwrt { description = "OpenWrt UBI"; \
+		data = /incbin/("$@"); type = "firmware"; arch = "arm"; \
+		compression = "none"; hash@1 { algo = "crc32"; }; \
+		hash@2 { algo = "sha1"; }; }; }; \
+		configurations { default = "conf-1"; \
+		conf-1 { firmware = "ubi-openwrt"; }; }; };' > $@.its
+	PATH=$(LINUX_DIR)/scripts/dtc:$(PATH) mkimage -f $@.its $@.new
+	@mv $@.new $@
+endef
+
+define Build/h3c-web-header
+	$(STAGING_DIR_HOST)/bin/mkh3cqca -i $@ -o $@.new \
+		-v $(word 1,$(1)) -d $(word 2,$(1))
+	@mv $@.new $@
+endef
+
+# The stock H3C U-Boot boots the FIT configuration named after the SoC
+# machid (config@mp03.1, config@mp02.1 or config@mp03.1-c2) and stops at
+# its console when the image does not have it. Every Magic board runs the
+# same kernel, so each image carries the DTB of every route: an image
+# installed on another hardware version still boots with the DTB of the
+# board it runs on, and the matching sysupgrade image can be installed
+# from there without a serial console.
+define Build/h3c-fit
+	( \
+		printf '/dts-v1/;\n/ {\n\tdescription = "ARM64 OpenWrt FIT (Flattened Image Tree)";\n\t#address-cells = <1>;\n\timages {\n'; \
+		printf '\t\tkernel-1 {\n\t\t\tdescription = "ARM64 OpenWrt Linux-$(LINUX_VERSION)";\n\t\t\tdata = /incbin/("$@");\n\t\t\ttype = "kernel";\n\t\t\tarch = "arm64";\n\t\t\tos = "linux";\n\t\t\tcompression = "$(1)";\n\t\t\tload = <$(KERNEL_LOADADDR)>;\n\t\t\tentry = <$(KERNEL_LOADADDR)>;\n\t\t\thash-1 { algo = "crc32"; };\n\t\t\thash-2 { algo = "sha1"; };\n\t\t};\n'; \
+		$(foreach dts,$(sort $(foreach c,$(H3C_FIT_CONFIGS),$(word 2,$(subst =, ,$(c))))), \
+			printf '\t\tfdt-$(dts) {\n\t\t\tdescription = "ARM64 OpenWrt $(dts) device tree blob";\n\t\t\tdata = /incbin/("$(KDIR)/image-$(dts).dtb");\n\t\t\ttype = "flat_dt";\n\t\t\tarch = "arm64";\n\t\t\tcompression = "none";\n\t\t\thash-1 { algo = "crc32"; };\n\t\t\thash-2 { algo = "sha1"; };\n\t\t};\n';) \
+		printf '\t};\n\tconfigurations {\n\t\tdefault = "$(DEVICE_DTS_CONFIG)";\n'; \
+		$(foreach c,$(H3C_FIT_CONFIGS), \
+			printf '\t\t$(word 1,$(subst =, ,$(c))) {\n\t\t\tdescription = "OpenWrt $(word 2,$(subst =, ,$(c)))";\n\t\t\tkernel = "kernel-1";\n\t\t\tfdt = "fdt-$(word 2,$(subst =, ,$(c)))";\n\t\t};\n';) \
+		printf '\t};\n};\n'; \
+	) > $@.its
+	$(call Build/fit-image)
+endef
+
+define Device/h3c_magic-qsdk
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	KERNEL = kernel-bin | libdeflate-gzip | h3c-fit gzip
+	H3C_FIT_CONFIGS = config@mp03.1=ipq5018-magic-rc3000-v2 \
+		config@mp02.1=ipq5018-magic-rc3000-v1 \
+		config@mp03.1-c2=ipq5018-magic-rc3000-v3
+	DEVICE_DTS += $$(foreach c,$$(H3C_FIT_CONFIGS),$$(word 2,$$(subst =, ,$$(c))))
+	DEVICE_VENDOR := H3C
+	SOC := ipq5018
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	IMAGE_SIZE := 40960k
+	NAND_SIZE := 128m
+endef
+
 
 define Device/avm_fritzbox-4050
 	$(call Device/FitImageLzma)
@@ -573,3 +632,19 @@ define Device/zyxel_scr50axe
 		ipq-wifi-zyxel_scr50axe
 endef
 TARGET_DEVICES += zyxel_scr50axe
+
+define Device/h3c_magic-nx54
+	$(call Device/h3c_magic-qsdk)
+	DEVICE_MODEL := Magic NX54
+	DEVICE_DTS_CONFIG := config@mp03.1
+	H3C_FIT_CONFIGS = config@mp03.1=ipq5018-magic-nx54
+	IMAGE_SIZE := 46336k
+	IMAGES += factory-nx54.bin
+	IMAGE/factory-nx54.bin := append-ubi | h3c-web-fit | pad-extra 16k | \
+		h3c-web-header NX54V100R999 D999
+	DEVICE_PACKAGES := ath11k-firmware-ipq5018-qcn6122 \
+		ath11k-firmware-qcn9074 \
+		ipq-wifi-h3c_magic-nx54 \
+		kmod-ath11k-pci
+endef
+TARGET_DEVICES += h3c_magic-nx54
