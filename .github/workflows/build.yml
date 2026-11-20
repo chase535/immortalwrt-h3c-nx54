@@ -1,0 +1,88 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -qq update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends \
+            -o Acquire::Retries=3 install \
+            build-essential clang flex bison g++ gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync swig \
+            unzip zlib1g-dev file wget cpio bc time perl
+
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          ./scripts/apply-feed-patches.sh
+
+      - name: Configure
+        run: |
+          cp .github/ci/nx54.config .config
+          make defconfig
+
+      - name: Download
+        run: make -j"$(nproc)" download
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Drop build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs
+          path: |
+            logs/
+            tmp/*.log
+          if-no-files-found: ignore
+
+      - name: Checksums
+        run: |
+          cd bin/targets/qualcommax/ipq50xx
+          sha256sum *.bin *.ubi *.itb > sha256sums.txt || true
+          cat sha256sums.txt
+
+      - name: Upload image
+        uses: actions/upload-artifact@v7
+        with:
+          name: nx54-image
+          path: |
+            bin/targets/qualcommax/ipq50xx/*.bin
+            bin/targets/qualcommax/ipq50xx/*.ubi
+            bin/targets/qualcommax/ipq50xx/*.itb
+            bin/targets/qualcommax/ipq50xx/*.manifest
+            bin/targets/qualcommax/ipq50xx/sha256sums.txt
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            bin/targets/qualcommax/ipq50xx/*.bin \
+            bin/targets/qualcommax/ipq50xx/*.manifest \
+            bin/targets/qualcommax/ipq50xx/sha256sums.txt \
+            --title "$GITHUB_REF_NAME" --notes "NX54 NSS build"

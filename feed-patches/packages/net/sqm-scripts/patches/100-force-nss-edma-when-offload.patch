@@ -1,0 +1,22 @@
+--- a/src/run-openwrt.sh
++++ b/src/run-openwrt.sh
+@@ -66,6 +66,19 @@
+     export TARGET=$(config_get "$section" target)
+     export QDISC=$(config_get "$section" qdisc)
+     export SCRIPT=$(config_get "$section" script)
++
++    # The NSS firmware offloads the data path, so the generic qdiscs
++    # (cake/fq_codel/htb) never see the offloaded packets and the shaping
++    # silently does nothing. When the offload is on, force the NSS qdisc that
++    # schedules in the firmware instead (sqm-scripts-nss ships it).
++    if [ -f "${SQM_LIB_DIR}/nss-edma.qos" ] &&
++       [ -e /sys/module/qca_nss_drv ] &&
++       [ "$(uci -q get nss.general.enabled)" != "0" ]; then
++        [ "${SCRIPT}" = "nss-edma.qos" ] ||
++            sqm_log "NSS offload is enabled: using nss-edma.qos instead of ${SCRIPT}"
++        SCRIPT=nss-edma.qos
++        QDISC=nss-edma
++    fi
+     export USE_MQ=$(config_get "$section" use_mq)
+ 
+     # The UCI names for these two variables are confusing and should have been
