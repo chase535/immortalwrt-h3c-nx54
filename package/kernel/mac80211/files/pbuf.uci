@@ -1,0 +1,20 @@
+config general opt
+  # Frequency scaling. On ipq5018 the NSS frequency table has MID = MAX =
+  # 1 GHz (see ipq5018-nss.dtsi), so the governor has nowhere to scale down
+  # to - measured: 2 minutes idle, still 1 GHz. What it does buy is the CPU
+  # utilization report: the driver only asks the firmware for instruction
+  # counts while scaling is enabled, so with this off cpu_load_ubi reads a
+  # meaningless "Min 100% Avg 0% Max 0%".
+  option auto_scale 'on'
+  # option memory_profile 'off'
+  option memory_profile 'auto'
+  # option memory_profile '1gb'
+  # option memory_profile '512mb'
+  # option memory_profile '256mb'
+  # CPU frequency governor written to every CPU at start. Unset, the
+  # kernel's schedutil stays: 1008 MHz idle, 1296 MHz under load on IPQ5018.
+  # option scaling_governor 'performance'
+  # Ceiling for the CPU clock in kHz, written to every CPU at start. Unset,
+  # the governor uses every OPP, up to 1296 MHz on IPQ5018/IPQ5000; 1008000
+  # keeps the rated 1008 MHz, for a chip that is not stable at 1296 MHz.
+  # option scaling_max_freq '1008000'

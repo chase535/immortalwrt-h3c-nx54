@@ -1,5 +1,5 @@
 PKG_DRIVERS += \
-	ath ath5k ath6kl ath6kl-sdio ath6kl-usb ath9k ath9k-common ath9k-htc ath10k ath10k-sdio ath10k-smallbuffers \
+	ath ath5k ath6kl ath6kl-sdio ath6kl-usb ath9k ath9k-common ath9k-htc ath10k ath10k-smallbuffers \
 	ath11k ath11k-ahb ath11k-pci ath12k carl9170 owl-loader ar5523 wil6210 qcom-qmi-helpers
 
 PKG_CONFIG_DEPENDS += \
@@ -14,7 +14,19 @@ PKG_CONFIG_DEPENDS += \
 	CONFIG_ATH10K_THERMAL \
 	CONFIG_ATH11K_THERMAL \
 	CONFIG_ATH12K_THERMAL \
-	CONFIG_ATH_USER_REGD
+	CONFIG_ATH_USER_REGD \
+	CONFIG_ATH11K_NSS_SUPPORT \
+	CONFIG_ATH11K_NSS_MESH_SUPPORT \
+	CONFIG_NSS_FIRMWARE_VERSION_11_4 \
+	CONFIG_NSS_FIRMWARE_VERSION_12_5 \
+	CONFIG_ATH11K_MEM_PROFILE_1G \
+	CONFIG_ATH11K_MEM_PROFILE_512M \
+	CONFIG_ATH11K_MEM_PROFILE_256M \
+	CONFIG_ATH11K_NSS_MEM_PROFILE_256M \
+	CONFIG_PACKAGE_nss-tools-dwmac \
+	CONFIG_PACKAGE_nss-tools \
+	CONFIG_ATH11K_DEBUGFS_STA \
+	CONFIG_ATH11K_DEBUGFS_HTT_STATS
 
 ifdef CONFIG_PACKAGE_MAC80211_DEBUGFS
   config-y += \
@@ -41,7 +53,7 @@ ifdef CONFIG_PACKAGE_MAC80211_TRACING
 endif
 
 config-$(call config_package,qcom-qmi-helpers) += QCOM_QMI_HELPERS
-config-$(call config_package,ath,regular sdio smallbuffers) += ATH_CARDS ATH_COMMON
+config-$(call config_package,ath,regular smallbuffers) += ATH_CARDS ATH_COMMON
 config-$(CONFIG_PACKAGE_ATH_DEBUG) += ATH_DEBUG ATH10K_DEBUG ATH11K_DEBUG ATH12K_DEBUG ATH9K_STATION_STATISTICS
 config-$(CONFIG_PACKAGE_ATH_DFS) += ATH9K_DFS_CERTIFIED ATH10K_DFS_CERTIFIED
 config-$(CONFIG_PACKAGE_ATH_SPECTRAL) += ATH9K_COMMON_SPECTRAL ATH10K_SPECTRAL ATH11K_SPECTRAL
@@ -61,10 +73,18 @@ config-$(CONFIG_ATH10K_LEDS) += ATH10K_LEDS
 config-$(CONFIG_ATH10K_THERMAL) += ATH10K_THERMAL
 config-$(CONFIG_ATH11K_THERMAL) += ATH11K_THERMAL
 config-$(CONFIG_ATH12K_THERMAL) += ATH12K_THERMAL
+config-$(CONFIG_ATH11K_NSS_SUPPORT) += ATH11K_NSS_SUPPORT
+config-$(CONFIG_ATH11K_NSS_MESH_SUPPORT) += ATH11K_NSS_MESH_SUPPORT
+config-$(CONFIG_ATH11K_MEM_PROFILE_1G) += ATH11K_MEM_PROFILE_1G
+config-$(CONFIG_ATH11K_MEM_PROFILE_512M) += ATH11K_MEM_PROFILE_512M
+# 256M is the 512M profile plus smaller RXDMA rings: define both symbols.
+config-$(CONFIG_ATH11K_MEM_PROFILE_256M) += ATH11K_MEM_PROFILE_512M ATH11K_MEM_PROFILE_256M
+config-$(CONFIG_ATH11K_NSS_MEM_PROFILE_256M) += ATH11K_NSS_MEM_PROFILE_256M
+config-$(CONFIG_ATH11K_DEBUGFS_STA) += ATH11K_DEBUGFS_STA
+config-$(CONFIG_ATH11K_DEBUGFS_HTT_STATS) += ATH11K_DEBUGFS_HTT_STATS
 
 config-$(call config_package,ath9k-htc) += ATH9K_HTC
 config-$(call config_package,ath10k,regular) += ATH10K ATH10K_PCI
-config-$(call config_package,ath10k-sdio,sdio) += ATH10K ATH10K_SDIO
 config-$(call config_package,ath10k-smallbuffers,smallbuffers) += ATH10K ATH10K_PCI ATH10K_SMALLBUFFERS
 config-$(call config_package,ath11k) += ATH11K
 config-$(call config_package,ath11k-ahb) += ATH11K_AHB
@@ -302,28 +322,8 @@ define KernelPackage/ath10k/config
 
        config ATH10K_THERMAL
                bool "Enable thermal sensors and throttling support"
-               default y
-               depends on PACKAGE_kmod-ath10k || PACKAGE_kmod-ath10k-sdio || PACKAGE_kmod-ath10k-smallbuffers
+               depends on PACKAGE_kmod-ath10k || PACKAGE_kmod-ath10k-smallbuffers
 
-endef
-
-define KernelPackage/ath10k-sdio
-  $(call KernelPackage/mac80211/Default)
-  TITLE:=Atheros 802.11ac SDIO wireless cards support
-  URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath10k
-  DEPENDS+= +kmod-ath +kmod-mmc +@DRIVER_11AC_SUPPORT \
-	+ATH10K_THERMAL:kmod-hwmon-core +ATH10K_THERMAL:kmod-thermal
-  FILES:= \
-	$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath10k/ath10k_core.ko \
-	$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath10k/ath10k_sdio.ko
-  AUTOLOAD:=$(call AutoProbe,ath10k_core)
-  MODPARAMS.ath10k_core:=frame_mode=2
-  VARIANT:=sdio
-endef
-
-define KernelPackage/ath10k-sdio/description
-This module adds support for wireless adapters based on
-Atheros IEEE 802.11ac family of chipsets with SDIO bus.
 endef
 
 define KernelPackage/ath10k-smallbuffers
@@ -340,12 +340,49 @@ define KernelPackage/ath11k
   DEPENDS+= +kmod-ath +@DRIVER_11AC_SUPPORT +@DRIVER_11AX_SUPPORT \
   +kmod-crypto-michael-mic +ATH11K_THERMAL:kmod-hwmon-core \
   +ATH11K_THERMAL:kmod-thermal +kmod-qcom-qmi-helpers
+  # NSS Wi-Fi offload pulls (qca-nss-drv + its wifi-offload flags) are done via
+  # 'select' inside config ATH11K_NSS_SUPPORT below, NOT here: kmod-mac80211's
+  # DEPENDS (package/kernel/mac80211/Makefile:138) carries
+  # '+ATH11K_NSS_SUPPORT:kmod-qca-nss-drv', and ath11k depends on mac80211, so a
+  # conditional dependency on ATH11K_NSS_SUPPORT here too would form a kconfig
+  # recursive-dependency cycle through mac80211.
   FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k.ko
+ifdef CONFIG_ATH11K_NSS_SUPPORT
+ifeq ($(CONFIG_TARGET_qualcommax_ipq50xx),y)
+# ipq50xx: the 'nss' service of nss-tools-dwmac loads ath11k itself, after
+# the firmware plane is armed. Autoloading it here means kmodloader probes
+# the radios with nss_offload=1 about fourteen seconds before the core is
+# up; ath11k_nss_setup() then fails with -EINVAL and the radios stay on the
+# host path for the rest of the boot, or the Q6 wedges outright ("failed to
+# wait wlan mode request (mode 4): -110"). On multipd IPQ5018 there is no
+# rmmod to recover with. Reported by @danpawlik on the forum.
+ifneq ($(CONFIG_PACKAGE_nss-tools-dwmac),y)
+  AUTOLOAD:=$(call AutoProbe,ath11k)
+# ipq50xx without the service: the NSS core only comes up when the service
+# arms a GMAC, so nothing ever enables it here. With nss_offload=1 anyway,
+# ath11k_nss_setup() logs "NSS offload support disabled, falling back to
+# default mode" and still returns -ENOTSUPP, which core.c treats as fatal:
+# "failed to create pdev core: -524", no radios at all (measured on a TP-Link
+# Archer AX55 v1 image built without nss-tools-dwmac). Load them on the host.
+  MODPARAMS.ath11k:=nss_offload=0 frame_mode=2
+endif
+else
+  # ath11k needs its own modules.d entry so frame_mode reaches the module at
+  # boot; NSS offload itself stays opt-in (nss_offload defaults to 0, and the
+  # 'nss' service of nss-tools sets it before it loads the bus drivers).
+  AUTOLOAD:=$(call AutoProbe,ath11k)
+  MODPARAMS.ath11k:=frame_mode=2
+endif
+endif
 endef
 
 define KernelPackage/ath11k/description
 This module adds support for Qualcomm Technologies 802.11ax family of
 chipsets.
+endef
+
+define KernelPackage/ath11k/conffiles
+/etc/config/pbuf
 endef
 
 define KernelPackage/ath11k/config
@@ -355,6 +392,118 @@ define KernelPackage/ath11k/config
                depends on PACKAGE_kmod-ath11k
                default y if TARGET_qualcommax
 
+       config ATH11K_NSS_SUPPORT
+               bool "Enable NSS WiFi offload"
+               # No 'depends on PACKAGE_kmod-ath11k': kmod-mac80211
+               # (package/kernel/mac80211/Makefile:138) carries
+               # '+ATH11K_NSS_SUPPORT:kmod-qca-nss-drv' and ath11k depends on
+               # mac80211, so gating this symbol on PACKAGE_kmod-ath11k forms a
+               # kconfig recursive-dependency cycle through mac80211. This config
+               # is still emitted inside KernelPackage/ath11k/config and only has
+               # effect when ath11k is built; it pulls the NSS data-plane driver
+               # + wifi-offload feature flags via 'select'.
+               select PACKAGE_kmod-qca-nss-drv
+               select NSS_DRV_WIFIOFFLOAD_ENABLE
+               select NSS_DRV_WIFI_EXT_VDEV_ENABLE
+               select ATH11K_MEM_PROFILE_512M if (TARGET_qualcommax_ipq807x_DEVICE_cmcc_rm2-6 || \
+               	 TARGET_qualcommax_ipq807x_DEVICE_edimax_cax1800 || \
+               	 TARGET_qualcommax_ipq807x_DEVICE_compex_wpq873 || \
+               	 TARGET_qualcommax_ipq807x_DEVICE_linksys_mx4200v1 || \
+               	 TARGET_qualcommax_ipq807x_DEVICE_redmi_ax6 || \
+               	 TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600 || \
+               	 TARGET_qualcommax_ipq807x_DEVICE_zte_mf269 )
+               select ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq807x_DEVICE_netgear_wax218
+               default n
+               help
+                  Say Y to offload the ath11k data path to the NSS cores
+                  (wifili). Requires the qca-ppe-nss glue to arm the NSS
+                  data plane before the firmware is booted; Wi-Fi starts
+                  in host mode and is rebound with nss_offload=1 at runtime.
+
+       config ATH11K_NSS_MEM_PROFILE_256M
+               bool "Smaller NSS allocations for 256 MiB IPQ5018/QCN6122 devices"
+               depends on ATH11K_NSS_SUPPORT && ATH11K_MEM_PROFILE_256M
+               default n
+               help
+                  Skip unused host TX arrays, reduce TX pools and completion
+                  rings, use private RX fragment caches, and reduce CE5 buffers.
+                  Only IPQ5018 and QCN6122 with active NSS use this profile.
+                  TX and CE5 queue capacity is lower. Other hardware and the
+                  host-only data path retain their existing allocations.
+
+       config ATH11K_NSS_MESH_SUPPORT
+               bool "Enable NSS 802.11s mesh offload"
+               depends on ATH11K_NSS_SUPPORT
+               # On IPQ807x and IPQ60xx every published NSS firmware newer
+               # than 11.4 rejects mesh interfaces at the firmware level (the
+               # capability probe reports no mesh support, and forcing past
+               # it gets the mesh-manager interface create NACKed - verified
+               # on 12.5-210 with both memory profiles), so there mesh offload
+               # needs the 11.4 firmware line. The IPQ5018 firmware 12.2 and
+               # 12.5 answer the capability probe and create the mesh manager
+               # (measured on a GL-B3000 and an Archer AX55, SAE included).
+               # 'depends on' rather than 'select' because
+               # NSS_FIRMWARE_VERSION_11_4 is a choice member and selecting
+               # into a choice is unreliable.
+               depends on NSS_FIRMWARE_VERSION_11_4 || TARGET_qualcommax_ipq50xx
+               # Same recursion constraint as ATH11K_NSS_SUPPORT above: the
+               # meshmgr module pull lives on kmod-mac80211's DEPENDS
+               # ('+ATH11K_NSS_MESH_SUPPORT:kmod-qca-nss-drv-wifi-meshmgr'),
+               # feature flags and packages are pulled via 'select' here.
+               select PACKAGE_kmod-qca-nss-drv-wifi-meshmgr
+               select NSS_DRV_WIFI_MESH_ENABLE
+               select PACKAGE_MAC80211_MESH
+               default n
+               help
+                  Say Y to offload 802.11s mesh forwarding (mesh path and
+                  proxy path tables) to the NSS cores via the Wi-Fi mesh
+                  manager. On IPQ807x and IPQ60xx this needs NSS firmware
+                  11.4; on IPQ5018 the 12.2 and 12.5 firmware support it.
+                  Without it 802.11s works on the host path only. Mesh
+                  interfaces use the NSS path only when the radio runs with
+                  nss_offload=1. An encrypted (SAE) mesh needs a supplicant
+                  built with mesh support (wpad-mesh-* or full wpad).
+
+       config ATH11K_DEBUGFS_STA
+               bool "Enable ath11k station statistics"
+               depends on PACKAGE_kmod-ath11k
+               depends on PACKAGE_MAC80211_DEBUGFS
+               default y
+               help
+                  Say Y to enable access to the station statistics via debugfs.
+
+       config ATH11K_DEBUGFS_HTT_STATS
+               bool "Enable ath11k HTT statistics"
+               depends on PACKAGE_kmod-ath11k
+               depends on PACKAGE_MAC80211_DEBUGFS
+               default y
+               help
+                  Say Y to enable access to the HTT statistics via debugfs.
+
+       choice
+            prompt "Memory Profile"
+            depends on PACKAGE_kmod-ath11k
+            default ATH11K_MEM_PROFILE_256M if TARGET_qualcommax_ipq50xx_DEVICE_cudy_p5 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-nx30 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v1 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v2 || TARGET_qualcommax_ipq50xx_DEVICE_h3c_magic-rc3000-v3 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax53-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_archer-ax58-v2 || TARGET_qualcommax_ipq50xx_DEVICE_tplink_ex511-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_cr8806 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_mi-router-ax3000t-v2 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_ra80 || TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax3000-ubootmod
+            default ATH11K_MEM_PROFILE_1G
+            help
+            	This option allows you to select the memory profile.
+            	It should correspond to the total RAM of your board.
+
+          config ATH11K_MEM_PROFILE_1G
+               bool "Use 1G memory profile"
+               help
+                  This allows configuring ath11k for boards with 1GB+ memory.
+
+          config ATH11K_MEM_PROFILE_512M
+               bool "Use 512MB memory profile"
+               help
+                  This allows configuring ath11k for boards with 512M memory.
+
+          config ATH11K_MEM_PROFILE_256M
+               bool "Use 256MB memory profile"
+               help
+                  This allows configuring ath11k for boards with 256M memory.
+       endchoice
 endef
 
 define KernelPackage/ath11k-ahb
@@ -363,7 +512,13 @@ define KernelPackage/ath11k-ahb
   URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath11k
   DEPENDS+= @(TARGET_qualcommax||TARGET_qualcommbe) +kmod-ath11k +kmod-qrtr-smd
   FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k_ahb.ko
+# Where an 'nss' service is in the image it loads the bus drivers, not
+# kmodloader: nss-tools-dwmac on ipq50xx after the arm (see kmod-ath11k),
+# nss-tools on ipq807x and ipq60xx once it has armed the data plane and set
+# nss_offload, so that the radios bind once and on the right path.
+ifeq ($(filter y,$(CONFIG_PACKAGE_nss-tools-dwmac) $(CONFIG_PACKAGE_nss-tools)),)
   AUTOLOAD:=$(call AutoProbe,ath11k_ahb)
+endif
 endef
 
 define KernelPackage/ath11k-ahb/description
@@ -377,7 +532,14 @@ define KernelPackage/ath11k-pci
   URL:=https://wireless.wiki.kernel.org/en/users/drivers/ath11k
   DEPENDS+= @PCI_SUPPORT +kmod-qrtr-mhi +kmod-ath11k
   FILES:=$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath11k/ath11k_pci.ko
+# Same as kmod-ath11k-ahb: an 'nss' service loads the bus driver after the
+# arm. Autoloading it here probes the radio while nss_offload is still 0,
+# and ath11k_base takes its nss.enabled from the parameter at probe time -
+# so the PCIe radio silently comes up on the host path and never registers
+# a wifili interface, whatever the service sets afterwards.
+ifeq ($(filter y,$(CONFIG_PACKAGE_nss-tools-dwmac) $(CONFIG_PACKAGE_nss-tools)),)
   AUTOLOAD:=$(call AutoProbe,ath11k_pci)
+endif
 endef
 
 define KernelPackage/ath11k-pci/description
