@@ -16,6 +16,14 @@ include $(INCLUDE_DIR)/package.mk
 define Build/Compile
 endef
 
+# Board data for devices not yet carried by the qca-wireless repo is kept
+# locally in ./files. Extend the default prepare rather than replacing it,
+# so the upstream checkout that every other board relies on still lands.
+define Build/Prepare
+	$(call Build/Prepare/Default,)
+	$(if $(wildcard ./files/*),$(CP) ./files/* $(PKG_BUILD_DIR)/)
+endef
+
 # Use ath10k-bdencoder from https://github.com/qca/qca-swiss-army-knife.git
 # to generate the board-* files here.
 #
@@ -52,6 +60,7 @@ ALLWIFIBOARDS:= \
 	glinet_gl-axt1800 \
 	glinet_gl-b3000 \
 	glinet_gl-x2000 \
+	h3c_magic-nx54 \
 	huawei_ap4050dn \
 	ignitenet_ss-w2-ac2600 \
 	iodata_wn-dax3000gr \
@@ -365,5 +374,7 @@ $(eval $(call generate-ipq-wifi-package,zyxel_nbg7815,Zyxel NBG7815))
 $(eval $(call generate-ipq-wifi-package,zyxel_nwa110ax,Zyxel NWA110AX))
 $(eval $(call generate-ipq-wifi-package,zyxel_nwa210ax,Zyxel NWA210AX))
 $(eval $(call generate-ipq-wifi-package,zyxel_scr50axe,Zyxel SCR50AXE))
+
+$(eval $(call generate-ipq-wifi-package,h3c_magic-nx54,H3C Magic NX54))
 
 $(foreach PACKAGE,$(ALLWIFIPACKAGES),$(eval $(call BuildPackage,$(PACKAGE))))
