@@ -77,7 +77,7 @@ mtd_get_mac_ascii() {
 	local key="$2"
 	local part
 
-	part=$(find_mtd_part "$mtdname")
+	part=$(find_mtd_chardev "$mtdname")
 	if [ -z "$part" ]; then
 		echo "mtd_get_mac_ascii: partition $mtdname not found!" >&2
 		return
@@ -94,7 +94,7 @@ mtd_get_mac_encrypted_arcadyan() {
 	local part
 	local size
 
-	part=$(find_mtd_part "$mtdname")
+	part=$(find_mtd_chardev "$mtdname")
 	if [ -z "$part" ]; then
 		echo "mtd_get_mac_encrypted_arcadyan: partition $mtdname not found!" >&2
 		return
@@ -146,7 +146,7 @@ mtd_get_mac_uci_config() {
 	local mtdname="$1"
 	local part
 
-	part=$(find_mtd_part "$mtdname")
+	part=$(find_mtd_chardev "$mtdname")
 	if [ -z "$part" ]; then
 		echo "mtd_get_mac_uci_config: partition $mtdname not found!" >&2
 		return
@@ -172,7 +172,7 @@ mtd_get_mac_text() {
 	local length="${3:-17}"
 	local part
 
-	part=$(find_mtd_part "$mtdname")
+	part=$(find_mtd_chardev "$mtdname")
 	if [ -z "$part" ]; then
 		echo "mtd_get_mac_text: partition $mtdname not found!" >&2
 		return
@@ -188,7 +188,7 @@ mtd_get_mac_binary() {
 	local offset="$2"
 	local part
 
-	part=$(find_mtd_part "$mtdname")
+	part=$(find_mtd_chardev "$mtdname")
 	get_mac_binary "$part" "$offset"
 }
 

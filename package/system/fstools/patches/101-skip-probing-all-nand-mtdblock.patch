@@ -1,0 +1,39 @@
+--- a/block.c	2026-11-21 08:07:50.279692103 +0800
++++ b/block.c	2026-11-21 08:07:50.309742334 +0800
+@@ -635,31 +635,12 @@
+ 		return false;
+ 
+ 	/*
+-	 * --- CUT HERE ---
+-	 * Keep probing rootfs and rootfs_data in the meantime to not break
+-	 * devices using JFFS2 on NAND but only trigger the kernel warnings.
+-	 * Remove this once all devices using JFFS2 and squashfs directly on
+-	 * NAND have been converted to UBI.
++	 * Skip probing all NAND mtdblock devices. They are legacy interfaces
++	 * which only make the kernel complain ("please consider using UBI
++	 * block devices") and are not usable as regular block devices here;
++	 * JFFS2 on raw NAND is not supported on this target.
+ 	 */
+-	snprintf(tmppath, sizeof(tmppath) - 1, "/sys/class/mtd/mtd%s/name", mtdnum);
+-	fp = fopen(tmppath, "r");
+-	if (!fp)
+-		return false;
+-
+-	if (!fgets(buf, sizeof(buf), fp)) {
+-		fclose(fp);
+-		return false;
+-	}
+-	fclose(fp);
+-	buf[sizeof(buf) - 1] = '\0'; /* make sure buf is 0-terminated */
+-	buf[strlen(buf) - 1] = '\0'; /* strip final char (newline) */
+-
+-	/* only return true if name differs from 'rootfs' and 'rootfs_data' */
+-	if (strcmp(buf, "rootfs") && strcmp(buf, "rootfs_data"))
+-		return true;
+-
+-	/* --- CUT HERE --- */
+-	return false;
++	return true;
+ }
+ 
+ static struct probe_info* _probe_path(char *path)
