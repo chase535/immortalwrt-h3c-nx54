@@ -360,6 +360,7 @@ if c3po_switch_bound; then
 		wifi_fw_memory_mode_2 || logger -t nss "topology dsa: a radio asks for ath11k-fw-memory-mode 1 in the DTS; Wi-Fi offload is on anyway (measured working on mode 1) - set nss.general.wifi_offload=0 if a radio misbehaves"
 	fi
 	[ -n "$(uci -q get nss.general.fw_logbuf)" ] || uci set nss.general.fw_logbuf='256'
+[ -n "$(uci -q get nss.general.payload_watchdog)" ] || uci set nss.general.payload_watchdog='1'
 	# board.d may split the DSA ports across both CPU links: the Redmi AX5400,
 	# the Cudy P5, the CMCC PZ-L8 and the CR880x put lan1-3 on eth1 and the WAN
 	# port on eth0. That split is kept exactly as board.d and netifd made it.

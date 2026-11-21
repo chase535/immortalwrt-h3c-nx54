@@ -135,8 +135,10 @@ define Package/nss-tools-dwmac/install
 	$(INSTALL_BIN) ./files/nss-irq-affinity $(1)/usr/sbin/nss-irq-affinity
 	$(INSTALL_BIN) ./files/nss-dwmac-probe $(1)/usr/sbin/nss-dwmac-probe
 	$(INSTALL_BIN) ./files/nss-status $(1)/usr/sbin/nss-status
+	$(INSTALL_BIN) ./files/nss-payload-watchdog $(1)/usr/sbin/nss-payload-watchdog
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/nss-dwmac.init $(1)/etc/init.d/nss
+	$(INSTALL_BIN) ./files/nss-payload-watchdog.init $(1)/etc/init.d/nss-payload-watchdog
 	$(INSTALL_DIR) $(1)/lib/nss
 	$(INSTALL_DATA) ./files/functions.sh $(1)/lib/nss/functions.sh
 	$(INSTALL_DIR) $(1)/etc/sysctl.d

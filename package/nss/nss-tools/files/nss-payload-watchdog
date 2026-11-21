@@ -1,0 +1,42 @@
+#!/bin/sh
+# Reclaim payload buffers that the NSS 12.5 firmware holds under Wi-Fi
+# offload with non-HE clients (kuncy7/openwrt-nss-edma#64).
+# Controlled by uci nss.general.payload_watchdog (default on), with
+# nss.general.payload_watchdog_interval seconds between samples.
+
+INTERVAL="$(uci -q get nss.general.payload_watchdog_interval)"
+[ -n "$INTERVAL" ] || INTERVAL=10
+
+STRIKES=0
+LAST_FLUSH=0
+
+while :; do
+	sleep "$INTERVAL"
+
+	[ "$(uci -q get nss.general.payload_watchdog)" = "0" ] && { STRIKES=0; continue; }
+
+	LOW="$(cat /proc/sys/dev/nss/n2hcfg/n2h_low_water_core0 2>/dev/null)"
+	[ -n "$LOW" ] || LOW=4096
+
+	FREE="$(awk '/payload_free_count/{print $3; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+	[ -n "$FREE" ] || FREE="$(awk '/payload_free_count/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+	[ -n "$FREE" ] || continue
+
+	if [ "$FREE" -lt "$LOW" ] 2>/dev/null; then
+		STRIKES=$((STRIKES + 1))
+	else
+		STRIKES=0
+		continue
+	fi
+
+	NOW="$(date +%s)"
+	[ "$STRIKES" -ge 3 ] || continue
+	[ $((NOW - LAST_FLUSH)) -ge 60 ] || continue
+
+	if echo 1 > /proc/sys/dev/nss/general/flush_payloads 2>/dev/null; then
+		logger -t nss-payload-watchdog \
+			"payload_free_count ${FREE} < low water ${LOW}, flushed payload buffers"
+		LAST_FLUSH="$NOW"
+		STRIKES=0
+	fi
+done
