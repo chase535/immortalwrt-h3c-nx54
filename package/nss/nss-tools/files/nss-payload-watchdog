@@ -1,8 +1,15 @@
 #!/bin/sh
 # Reclaim payload buffers that the NSS 12.5 firmware holds under Wi-Fi
 # offload with non-HE clients (kuncy7/openwrt-nss-edma#64).
-# Controlled by uci nss.general.payload_watchdog (default on), with
-# nss.general.payload_watchdog_interval seconds between samples.
+#
+# A payload flush makes the firmware drop frames that are in flight or
+# queued, so the watchdog prefers moments where nothing can be lost:
+#  - no station is associated at all (no data frames in flight), or
+#  - the N2H data path has been quiet for 2 s and the pool is below the
+#    emergency threshold for 60 s.
+# Controlled by uci nss.general.payload_watchdog (default on),
+# nss.general.payload_watchdog_interval (default 10 s) and
+# nss.general.payload_watchdog_idle_pkts (default 20 packets / 2 s).
 
 INTERVAL="$(uci -q get nss.general.payload_watchdog_interval)"
 [ -n "$INTERVAL" ] || INTERVAL=10
@@ -10,6 +17,37 @@ INTERVAL="$(uci -q get nss.general.payload_watchdog_interval)"
 STRIKES=0
 LAST_FLUSH=0
 PEAK=""
+
+free_count() {
+	awk '/payload_free_count/{print $3; exit}' \
+		/sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null ||
+	awk '/payload_free_count/{print $NF; exit}' \
+		/sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null
+}
+
+pkt_count() {
+	awk '/n2h_data_packets/{print $3; exit}' \
+		/sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null ||
+	awk '/n2h_data_packets/{print $NF; exit}' \
+		/sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null
+}
+
+station_count() {
+	for dev in $(iw dev 2>/dev/null | awk '$1 == "Interface" { print $2 }'); do
+		iw dev "$dev" station dump 2>/dev/null | grep -c '^Station'
+	done | awk '{ s += $1 } END { print s + 0 }'
+}
+
+flush_payloads() {
+	if echo 1 > /proc/sys/dev/nss/general/flush_payloads 2>/dev/null; then
+		logger -t nss-payload-watchdog \
+			"payload_free_count ${FREE} < ${LOW} (${REASON}), flushed payload buffers"
+		LAST_FLUSH="$(date +%s)"
+		STRIKES=0
+		return 0
+	fi
+	return 1
+}
 
 while :; do
 	sleep "$INTERVAL"
@@ -19,52 +57,65 @@ while :; do
 	LOW="$(cat /proc/sys/dev/nss/n2hcfg/n2h_low_water_core0 2>/dev/null)"
 	[ -n "$LOW" ] || LOW=4096
 
-	FREE="$(awk '/payload_free_count/{print $3; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
-	[ -n "$FREE" ] || FREE="$(awk '/payload_free_count/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+	FREE="$(free_count)"
 	[ -n "$FREE" ] || continue
 
-	# Track the highest free count seen since start (after boot the
-	# Wi-Fi pools fill once, then the count falls when traffic starts),
-	# and treat a sustained 50% drop from that peak as a leak in progress. The
-	# firmware low water mark alone only fires close to exhaustion.
+	# Track the highest free count seen since start; after boot the Wi-Fi
+	# pools fill once, then the count falls with traffic.
 	[ -z "$PEAK" ] && PEAK="$FREE"
 	[ "$FREE" -gt "$PEAK" ] && PEAK="$FREE"
 	THRESHOLD=$((PEAK * 50 / 100))
 	[ "$THRESHOLD" -gt "$LOW" ] && LOW="$THRESHOLD"
 
-	if [ "$FREE" -lt "$LOW" ] 2>/dev/null; then
-		STRIKES=$((STRIKES + 1))
-	else
-		STRIKES=0
+	EMERGENCY=$((PEAK * 20 / 100))
+	[ "$EMERGENCY" -lt 2048 ] && EMERGENCY=2048
+
+	NOW="$(date +%s)"
+	[ $((NOW - LAST_FLUSH)) -ge 10 ] || continue
+
+	# Hard floor: whatever the traffic, do not let the pool run dry. This
+	# costs one burst of dropped frames, but the alternative is a stalled
+	# wired path or an OOM kill.
+	if [ "$FREE" -lt "$EMERGENCY" ] 2>/dev/null; then
+		REASON="emergency floor ${EMERGENCY}"
+		flush_payloads && continue
+	fi
+
+	[ "$FREE" -lt "$LOW" ] 2>/dev/null || { STRIKES=0; continue; }
+	[ $((NOW - LAST_FLUSH)) -ge 60 ] || continue
+
+	# Best case: nobody is associated, so a flush cannot drop user frames.
+	STATIONS="$(station_count)"
+	if [ "$STATIONS" -eq 0 ]; then
+		REASON="no stations associated"
+		flush_payloads && continue
+	fi
+
+	# Emergency path: wait for a quiet data path, then flush anyway.
+	STRIKES=$((STRIKES + 1))
+	[ "$STRIKES" -ge 6 ] || continue
+
+	IDLE_PKTS="$(uci -q get nss.general.payload_watchdog_idle_pkts)"
+	[ -n "$IDLE_PKTS" ] || IDLE_PKTS=20
+	P0="$(pkt_count)"
+	[ -n "$P0" ] || continue
+	sleep 2
+	P1="$(pkt_count)"
+	[ -n "$P1" ] || continue
+	if [ $((P1 - P0)) -le "$IDLE_PKTS" ] 2>/dev/null; then
+		REASON="quiet data path"
+		flush_payloads
 		continue
 	fi
 
-	NOW="$(date +%s)"
-	[ "$STRIKES" -ge 6 ] || continue
-	[ $((NOW - LAST_FLUSH)) -ge 60 ] || continue
-
-	# Flushing drops frames that are in flight or queued in the firmware.
-	# Wait for a quiet moment: sample the N2H data packet counter and only
-	# flush when fewer than payload_watchdog_idle_pkts arrived in 2 s.
-	IDLE_PKTS="$(uci -q get nss.general.payload_watchdog_idle_pkts)"
-	[ -n "$IDLE_PKTS" ] || IDLE_PKTS=20
-	P0="$(awk '/n2h_data_packets/{print $3; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
-	[ -n "$P0" ] || P0="$(awk '/n2h_data_packets/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
-	if [ -n "$P0" ]; then
-		sleep 2
-		P1="$(awk '/n2h_data_packets/{print $3; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
-		[ -n "$P1" ] || P1="$(awk '/n2h_data_packets/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
-		if [ -n "$P1" ] && [ $((P1 - P0)) -gt "$IDLE_PKTS" ] 2>/dev/null; then
-			logger -t nss-payload-watchdog \
-				"deferring flush: ${IDLE_PKTS}+ packets in 2 s"
-			continue
-		fi
+	# The data path never went quiet: still reclaim after 10 minutes below
+	# the threshold, otherwise a permanently busy link leaks until OOM.
+	if [ "$STRIKES" -ge 60 ]; then
+		REASON="busy for 10 min, forced"
+		flush_payloads
+		continue
 	fi
 
-	if echo 1 > /proc/sys/dev/nss/general/flush_payloads 2>/dev/null; then
-		logger -t nss-payload-watchdog \
-			"payload_free_count ${FREE} < low water ${LOW}, flushed payload buffers"
-		LAST_FLUSH="$NOW"
-		STRIKES=0
-	fi
+	logger -t nss-payload-watchdog \
+		"deferring flush: more than ${IDLE_PKTS} packets in 2 s"
 done
