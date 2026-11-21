@@ -19,6 +19,7 @@
 | 5 GHz（QCN9074 PCIe，NSS 卸载） | ✅ 已验证 |
 | CPU 频率（1008 / 1296 MHz） | ✅ LuCI 可切换 |
 | NSS ECM / VLAN / PPPoE / SQM | ✅ 已集成 |
+| SSH / SFTP（Dropbear + OpenSSH SFTP subsystem） | ✅ 已集成 |
 | LuCI 中文、Argon 主题、TurboACC、UPnP、DDNS | ✅ 已集成 |
 | 长时间满负载稳定性 | ⚠️ 未进行稳定性验证 |
 
@@ -68,6 +69,7 @@
 
 - `dnsmasq-full`、`odhcpd-ipv6only`、`odhcp6c`、`firewall4`、`nftables-json`、`ppp`、`ppp-mod-pppoe`、`dropbear`
 - `wpad-openssl`、`hostapd-common`、`wifi-scripts`、`wireless-regdb`
+- SSH：`dropbear`；SFTP 子系统：`openssh-sftp-server`（不安装完整 `openssh-server`）
 - `miniupnpd-nftables`、`ddns-scripts`、`ddns-scripts-services`
 
 **NSS 相关**
@@ -88,6 +90,28 @@
 > 这些工具会增大只读 rootfs，相应压缩 overlay（`rootfs_data`）空间。
 > rootfs 分区 45.25 MB，扣除 kernel 5.7 MB、squashfs 18.9 MB 与 UBI 开销后，
 > 当前镜像刷入后 overlay 可用约 **16 MB**（以设备上 `df -h /overlay` 为准）。
+
+## SSH / SFTP 文件传输
+
+固件使用 **Dropbear** 提供 SSH 服务，并通过独立的 `openssh-sftp-server` 提供 SFTP 子系统。
+Dropbear 的 `CONFIG_DROPBEAR_SFTPSERVER` 已启用；构建配置同时选中
+`CONFIG_PACKAGE_openssh-sftp-server`，安装路径为 `/usr/libexec/sftp-server`。
+不安装完整的 `openssh-server`，也不改变现有 Dropbear 服务、SSH 端口或认证配置。
+
+连接参数：
+
+| 项目 | 设置 |
+|---|---|
+| 协议 | SFTP（不是 FTP，也不是 SCP） |
+| 主机 | 路由器 LAN 地址（默认 `192.168.1.1`） |
+| 端口 | `22` |
+| 用户名 | `root` |
+| 认证 | 使用现有 SSH 密码或公钥认证 |
+
+在 WinSCP、FileZilla 或其他客户端中选择 **SFTP** 协议，填写上述主机、端口和 SSH 凭据即可。
+首次启动时 root 默认无密码；需要密码登录时，先通过本机控制台或现有管理入口执行
+`passwd` 设置密码。若使用公钥认证，沿用 Dropbear 的
+`/etc/dropbear/authorized_keys`。
 
 ## 构建
 
