@@ -361,6 +361,7 @@ if c3po_switch_bound; then
 	fi
 	[ -n "$(uci -q get nss.general.fw_logbuf)" ] || uci set nss.general.fw_logbuf='256'
 [ -n "$(uci -q get nss.general.payload_watchdog)" ] || uci set nss.general.payload_watchdog='1'
+[ -n "$(uci -q get nss.general.payload_watchdog_idle_pkts)" ] || uci set nss.general.payload_watchdog_idle_pkts='20'
 	# board.d may split the DSA ports across both CPU links: the Redmi AX5400,
 	# the Cudy P5, the CMCC PZ-L8 and the CR880x put lan1-3 on eth1 and the WAN
 	# port on eth0. That split is kept exactly as board.d and netifd made it.

@@ -43,6 +43,24 @@ while :; do
 	[ "$STRIKES" -ge 6 ] || continue
 	[ $((NOW - LAST_FLUSH)) -ge 60 ] || continue
 
+	# Flushing drops frames that are in flight or queued in the firmware.
+	# Wait for a quiet moment: sample the N2H data packet counter and only
+	# flush when fewer than payload_watchdog_idle_pkts arrived in 2 s.
+	IDLE_PKTS="$(uci -q get nss.general.payload_watchdog_idle_pkts)"
+	[ -n "$IDLE_PKTS" ] || IDLE_PKTS=20
+	P0="$(awk '/n2h_data_packets/{print $3; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+	[ -n "$P0" ] || P0="$(awk '/n2h_data_packets/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+	if [ -n "$P0" ]; then
+		sleep 2
+		P1="$(awk '/n2h_data_packets/{print $3; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+		[ -n "$P1" ] || P1="$(awk '/n2h_data_packets/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
+		if [ -n "$P1" ] && [ $((P1 - P0)) -gt "$IDLE_PKTS" ] 2>/dev/null; then
+			logger -t nss-payload-watchdog \
+				"deferring flush: ${IDLE_PKTS}+ packets in 2 s"
+			continue
+		fi
+	fi
+
 	if echo 1 > /proc/sys/dev/nss/general/flush_payloads 2>/dev/null; then
 		logger -t nss-payload-watchdog \
 			"payload_free_count ${FREE} < low water ${LOW}, flushed payload buffers"
