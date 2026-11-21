@@ -1,0 +1,28 @@
+--- a/files/usr/share/hostap/wifi-detect.uc
++++ b/files/usr/share/hostap/wifi-detect.uc
+@@ -22,7 +22,8 @@ function phy_path(name) {
+ 	let devpath = realpath(`/sys/class/ieee80211/${name}/device`);
+ 
+ 	devpath = replace(devpath, /^\/sys\/devices\//, "");
+-	if (match(devpath, /^platform\/.*\/pci/))
++	let board = readfile("/tmp/sysinfo/board_name");
++	board = board ? trim(board) : "";
++	if (board != "h3c,magic-nx54" && match(devpath, /^platform\/.*\/pci/))
+ 		devpath = replace(devpath, /^platform\//, "");
+ 	let dev_phys = map(glob(`/sys/class/ieee80211/${name}/device/ieee80211/*`), basename);
+ 	sort(dev_phys, (a, b) => phy_idx(a) - phy_idx(b));
+
+--- a/files-ucode/usr/share/ucode/wifi/hostapd.uc
++++ b/files-ucode/usr/share/ucode/wifi/hostapd.uc
+@@ -21,2 +21,10 @@
+ function set_device_defaults(config) {
++	let board = fs.readfile("/tmp/sysinfo/board_name");
++	board = board ? trim(board) : "";
++	let phy_path = config.phy ? fs.realpath(`/sys/class/ieee80211/${config.phy}/device`) : null;
++	if (phy_path)
++		phy_path = replace(phy_path, /^\/sys\/devices\//, "");
++	if (board == "h3c,magic-nx54" &&
++	    phy_path == "platform/soc@0/a0000000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0")
++		config.band = '5g';
++
+ 	/* validate the hw mode */

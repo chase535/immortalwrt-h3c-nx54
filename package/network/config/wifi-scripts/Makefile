@@ -9,9 +9,8 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wifi-scripts
 PKG_VERSION:=1.0
-PKG_RELEASE:=5
+PKG_RELEASE:=7
 PKG_LICENSE:=GPL-2.0
-
 PKG_MAINTAINER:=Felix Fietkau <nbd@nbd.name>
 PKG_CONFIG_DEPENDS:=CONFIG_WIFI_SCRIPTS_UCODE
 
@@ -34,6 +33,10 @@ define Package/wifi-scripts/description
 endef
 
 define Build/Prepare
+	mkdir -p $(PKG_BUILD_DIR)
+	$(CP) ./files $(PKG_BUILD_DIR)/
+	$(CP) ./files-ucode $(PKG_BUILD_DIR)/
+	$(PATCH) -d $(PKG_BUILD_DIR) -p1 < ./patches/100-nx54-preserve-platform-path.patch
 endef
 
 define Build/Configure
@@ -44,9 +47,9 @@ endef
 
 define Package/wifi-scripts/install
 	$(INSTALL_DIR) $(1)
-	$(CP) ./files/* $(1)/
+	$(CP) $(PKG_BUILD_DIR)/files/* $(1)/
 ifeq ($(CONFIG_WIFI_SCRIPTS_UCODE),y)
-	$(CP) ./files-ucode/* $(1)/
+	$(CP) $(PKG_BUILD_DIR)/files-ucode/* $(1)/
 endif
 ifeq ($(CONFIG_WIFI_SCRIPTS_WPS_BUTTON_DISABLED),y)
 	rm -f $(1)/etc/rc.button/wps
