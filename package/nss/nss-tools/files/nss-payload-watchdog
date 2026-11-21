@@ -9,6 +9,7 @@ INTERVAL="$(uci -q get nss.general.payload_watchdog_interval)"
 
 STRIKES=0
 LAST_FLUSH=0
+PEAK=""
 
 while :; do
 	sleep "$INTERVAL"
@@ -22,6 +23,15 @@ while :; do
 	[ -n "$FREE" ] || FREE="$(awk '/payload_free_count/{print $NF; exit}' /sys/kernel/debug/qca-nss-drv/stats/n2h 2>/dev/null)"
 	[ -n "$FREE" ] || continue
 
+	# Track the highest free count seen since start (after boot the
+	# Wi-Fi pools fill once, then the count falls when traffic starts),
+	# and treat a sustained 50% drop from that peak as a leak in progress. The
+	# firmware low water mark alone only fires close to exhaustion.
+	[ -z "$PEAK" ] && PEAK="$FREE"
+	[ "$FREE" -gt "$PEAK" ] && PEAK="$FREE"
+	THRESHOLD=$((PEAK * 50 / 100))
+	[ "$THRESHOLD" -gt "$LOW" ] && LOW="$THRESHOLD"
+
 	if [ "$FREE" -lt "$LOW" ] 2>/dev/null; then
 		STRIKES=$((STRIKES + 1))
 	else
@@ -30,7 +40,7 @@ while :; do
 	fi
 
 	NOW="$(date +%s)"
-	[ "$STRIKES" -ge 3 ] || continue
+	[ "$STRIKES" -ge 6 ] || continue
 	[ $((NOW - LAST_FLUSH)) -ge 60 ] || continue
 
 	if echo 1 > /proc/sys/dev/nss/general/flush_payloads 2>/dev/null; then
