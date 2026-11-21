@@ -1,0 +1,22 @@
+From: Stanislaw Pal <kuncy7@gmail.com>
+Subject: [PATCH] net: dsa: qca8k: take the management ack header again after the pull
+
+The handler takes mgmt_ethhdr from skb_mac_header() before pskb_may_pull()
+and keeps using that pointer afterwards. pskb_may_pull() can move the
+head, so read ->seq and ->mdio_data through a stale pointer. Take the
+header again after the pull, as the MIB path already does.
+
+Signed-off-by: Stanislaw Pal <kuncy7@gmail.com>
+---
+--- a/drivers/net/dsa/qca/qca8k-8xxx.c
++++ b/drivers/net/dsa/qca/qca8k-8xxx.c
+@@ -198,6 +198,9 @@
+ 	if (data_len && !pskb_may_pull(skb, data_len))
+ 		goto complete;
+ 
++	/* pskb_may_pull() can move the head; take the header again. */
++	mgmt_ethhdr = (struct qca_mgmt_ethhdr *)skb_mac_header(skb);
++
+ 	/* Make sure the seq match the requested packet */
+ 	if (get_unaligned_le32(&mgmt_ethhdr->seq) == mgmt_eth_data->seq)
+ 		mgmt_eth_data->ack = true;
