@@ -1,0 +1,48 @@
+nss_init: add a sysctl to flush the N2H payload buffers
+
+nss_n2h_flush_payloads() already exists but is only reachable from the
+MTU-change path. Expose it as dev/nss/general/flush_payloads so a
+watchdog can reclaim payload buffers the firmware is holding on 12.5
+without a driver reload.
+
+--- a/nss_init.c
++++ b/nss_init.c
+@@ -524,6 +524,22 @@
+ };
+ #endif
+ 
++extern nss_tx_status_t nss_n2h_flush_payloads(struct nss_ctx_instance *nss_ctx);
++
++static int nss_ctl_flush_payloads;
++static int nss_flush_payloads_handler(const struct ctl_table *ctl, int write,
++		void *buffer, size_t *lenp, loff_t *ppos)
++{
++	int ret = proc_dointvec(ctl, write, buffer, lenp, ppos);
++
++	if (!ret && write && nss_ctl_flush_payloads) {
++		nss_ctl_flush_payloads = 0;
++		if (nss_top_main.num_nss)
++			nss_n2h_flush_payloads(&nss_top_main.nss[0]);
++	}
++	return ret;
++}
++
+ static struct ctl_table nss_general_table[] = {
+ 	{
+ 		.procname               = "redirect",
+@@ -566,7 +582,14 @@
+ 		.maxlen                 = sizeof(int),
+ 		.mode                   = 0644,
+ 		.proc_handler           = &nss_paged_mode_handler,
+-	}
++	},
++	{
++		.procname               = "flush_payloads",
++		.data                   = &nss_ctl_flush_payloads,
++		.maxlen                 = sizeof(int),
++		.mode                   = 0644,
++		.proc_handler           = &nss_flush_payloads_handler,
++	},
+ };
+ 
+ static struct ctl_table_header *nss_clk_hdr;
