@@ -1,0 +1,16 @@
+--- a/iwinfo_nl80211.c
++++ b/iwinfo_nl80211.c
+@@ -331,6 +331,13 @@
+ 	if (!path)
+ 		return -1;
+ 
++	/*
++	 * nl80211_phy_path_str() drops the "platform/" prefix for PCI
++	 * devices, so normalize the caller-supplied path the same way.
++	 */
++	if (!strncmp(path, "platform/", sizeof("platform/") - 1) && strstr(path, "/pci"))
++		path += sizeof("platform/") - 1;
++
+ 	path_len = strlen(path);
+ 	if (!path_len)
+ 		return -1;

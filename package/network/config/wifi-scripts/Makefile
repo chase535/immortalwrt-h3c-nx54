@@ -9,7 +9,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wifi-scripts
 PKG_VERSION:=1.0
-PKG_RELEASE:=7
+PKG_RELEASE:=9
 PKG_LICENSE:=GPL-2.0
 PKG_MAINTAINER:=Felix Fietkau <nbd@nbd.name>
 PKG_CONFIG_DEPENDS:=CONFIG_WIFI_SCRIPTS_UCODE
@@ -36,7 +36,7 @@ define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./files $(PKG_BUILD_DIR)/
 	$(CP) ./files-ucode $(PKG_BUILD_DIR)/
-	$(PATCH) -d $(PKG_BUILD_DIR) -p1 < ./patches/100-nx54-preserve-platform-path.patch
+	$(PATCH) -d $(PKG_BUILD_DIR) -p1 < ./patches/100-normalize-pci-phy-paths.patch
 endef
 
 define Build/Configure

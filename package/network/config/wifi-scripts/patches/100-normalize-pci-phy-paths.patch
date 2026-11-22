@@ -1,0 +1,55 @@
+--- a/files/usr/share/hostap/wifi-detect.uc
++++ b/files/usr/share/hostap/wifi-detect.uc
+@@ -34,11 +34,18 @@
+ 	return devpath;
+ }
+ 
++function normalize_path(path) {
++	if (type(path) == "string" && match(path, /^platform\/.*\/pci/))
++		path = replace(path, /^platform\//, "");
++	return path;
++}
++
+ function wiphy_path_match(entry_path, path) {
++	path = normalize_path(path);
+ 	if (type(entry_path) == "array")
+-		return index(entry_path, path) >= 0;
++		return index(map(entry_path, normalize_path), path) >= 0;
+ 
+-	return entry_path == path;
++	return normalize_path(entry_path) == path;
+ }
+ 
+ function wiphy_get_entry(phy, path) {
+--- a/files-ucode/usr/share/ucode/wifi/hostapd.uc
++++ b/files-ucode/usr/share/ucode/wifi/hostapd.uc
+@@ -481,6 +481,16 @@
+ 	return !!(data[flag / 8] & (1 << (flag % 8)));
+ }
+ 
++function detect_band(phy) {
++	let info = wiphy_info(phy);
++	for (let band in [ '2g', '5g', '6g', '60g' ]) {
++		let b = wiphy_band(info, band);
++		if (b && b.freqs && b.freqs[0])
++			return band;
++	}
++	return null;
++}
++
+ function device_capabilities(config) {
+ 	let phy = config.phy;
+ 
+@@ -509,6 +519,12 @@
+ 	if (!config)
+ 		die(`${config.path} is an unknown phy`);
+ 
++	if (!config.band) {
++		let band = detect_band(config.phy);
++		if (band)
++			config.band = band;
++	}
++
+ 	device_capabilities(config);
+ 
+ 	append('driver', 'nl80211');
