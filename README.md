@@ -70,7 +70,7 @@
 - `dnsmasq-full`、`odhcpd-ipv6only`、`odhcp6c`、`firewall4`、`nftables-json`、`ppp`、`ppp-mod-pppoe`、`dropbear`
 - `wpad-openssl`、`hostapd-common`、`wifi-scripts`、`wireless-regdb`
 - SSH：`dropbear`；SFTP 子系统：`openssh-sftp-server`（不安装完整 `openssh-server`）
-- `miniupnpd-nftables`、`ddns-scripts`、`ddns-scripts-services`
+- `miniupnpd-nftables`、`ddns-scripts`、`ddns-scripts-services`、`ddns-scripts-dnspod-starsunyzl`、`bind-host`（提供 `host` DNS 查询工具，支持 DDNS Glue Record 检测及 DNS over TCP）
 
 **NSS 相关**
 
@@ -87,9 +87,20 @@
 - `ath11k-firmware-ipq5018-qcn6122`、`ath11k-firmware-qcn9074`、`ipq-wifi-h3c_magic-nx54`
 - `dumpimage`、`apk-openssl`、`openwrt-keyring`
 
-> 这些工具会增大只读 rootfs，相应压缩 overlay（`rootfs_data`）空间。
-> rootfs 分区 45.25 MB，扣除 kernel 5.7 MB、squashfs 18.9 MB 与 UBI 开销后，
-> 当前镜像刷入后 overlay 可用约 **16 MB**（以设备上 `df -h /overlay` 为准）。
+> 这些工具会增大只读 rootfs，相应压缩 overlay (rootfs_data) 空间。
+> 当前镜像刷入后 overlay 可用约 12 MB（以设备上 df -h /overlay 为准）。
+
+## 动态 DNS（DDNS）
+
+固件预装完整的 LuCI DDNS 基础组件：
+
+- `luci-app-ddns` 与简体中文界面：在 **网络 → 动态 DNS** 中管理服务。
+- `ddns-scripts`、`ddns-scripts-services`：提供 IPv4/IPv6 动态地址检测、常见 DDNS 服务商定义、更新与日志功能。
+- `ddns-scripts-dnspod-starsunyzl`：集成 [starsunyzl/ddns-scripts-dnspod](https://github.com/starsunyzl/ddns-scripts-dnspod)，使用腾讯云 API 3.0 更新 DNSPod 记录，支持 IPv4、IPv6 和多条同类型记录。
+- `bind-host`：提供 BIND 的 `host` 查询命令，启用 Glue Record 检测及强制 DNS over TCP 等需要 BIND host 的功能。
+- `curl`、`wget-ssl`、`ca-bundle`：为服务商 API、HTTPS 更新和证书验证提供基础支持。
+
+进入 **网络 → 动态 DNS**，新增服务并选择 `dnspod`，分别配置 IPv4/IPv6 服务。`Username` 填腾讯云 API `SecretId`，`Password` 填 `SecretKey`；`Domain` 填 `主机记录@主域名`（例如 `www@example.com`，根域名可填 `@example.com`）；`Lookup Hostname` 填用于检测的完整域名。一个主机记录存在多条同类型记录时，在 `Optional Encoded Parameter` 中填写对应 `RecordId`；留空时插件仅在匹配到唯一记录时自动选择。腾讯云 API 3.0 要求设备系统时间与标准时间误差不超过 5 分钟。需要 Glue Record 检测或 DNS over TCP 时，由预装的 `bind-host` 提供支持。
 
 ## SSH / SFTP 文件传输
 
