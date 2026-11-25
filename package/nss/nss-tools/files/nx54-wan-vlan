@@ -1,0 +1,238 @@
+#!/bin/sh
+# nx54-wan-vlan -- put the wired WAN L3 on a local 802.1Q VLAN over gmac0.
+#
+# Why: on a bare NSS port (the NX54 WAN is gmac0, no switch and no VLAN) the
+# nss-edma download shaper redirects WAN ingress to an IFB, and what the IFB
+# hands back enters the port node; the firmware then has no VLAN node to put
+# the packet back on the accelerated path.  A VLAN-filtering bridge over wan
+# gives the firmware that node without changing anything on the wire: the
+# bridge tags untagged ingress with the PVID and strips the tag on egress.
+#
+# netifd does NOT own the bridge.  We create br-wan (vlan_filtering) and
+# br-wan.<vid> with ip/bridge before netifd starts, and netifd only sees
+# br-wan.<vid> as an existing device in network.wan.device.  Cleanup is one
+# "ip link del br-wan"; there are no bridge sections in /etc/config/network
+# and no netifd state to reconcile.
+#
+# usage:
+#   nx54-wan-vlan prepare [vid]  write the config and create the devices (no reload)
+#   nx54-wan-vlan setup [vid]    prepare + network reload (manual use)
+#   nx54-wan-vlan autoconf       bring the current boot in line (boot fallback)
+#   nx54-wan-vlan sqm            point the SQM queues at br-wan.<vid>
+#   nx54-wan-vlan status         show the bridge, VLAN, addresses and counters
+#   nx54-wan-vlan rollback       move the WAN back to bare wan and delete br-wan
+
+# No `set -e`: uci get/delete of an absent option returns 1, and a missing
+# option used to kill autoconf silently before it could create the bridge.
+# Every step below is explicitly checked or logged instead.
+. /lib/nx54-wan-vlan.sh
+
+VID_DEFAULT=$(nx54_vid)
+BAK=/etc/nx54-wan-vlan.bak
+
+die() { echo "nx54-wan-vlan: $*" >&2; exit 1; }
+
+
+backup() {
+	[ -d "$BAK" ] && return 0
+	mkdir -p "$BAK"
+	cp /etc/config/network "$BAK/network"
+	[ -f /etc/config/sqm ] && cp /etc/config/sqm "$BAK/sqm"
+}
+
+# Config only: move network.<sec>.device to br-wan.<vid> and drop the legacy
+# brwan/wanvlan sections (they were netifd-owned bridges in older versions).
+prepare() {
+	local vid=${1:-$VID_DEFAULT} sec proto dev sec6 dev6
+	nx54_lock_take nx54-wan-vlan.prepare || return 0
+	command -v uci >/dev/null || die "no uci"
+	sec=$(nx54_wan_section) || die "no WAN interface section found"
+	proto=$(uci -q get "network.$sec.proto")
+	dev=$(uci -q get "network.$sec.device") || dev=""
+	[ -n "$dev" ] || { dev=$(uci -q get "network.$sec.ifname"); dev=${dev:-}; }
+	[ -n "$dev" ] || dev=wan
+
+	sec6=$(nx54_wan6_section "$sec") || sec6=""
+	dev6=""
+	[ -n "$sec6" ] && dev6=$(uci -q get "network.$sec6.device")
+
+	# A disabled WAN needs no bridge; also do not leave the config pointing
+	# at the VLAN device we are about to remove.
+	if [ "$proto" = "none" ] || [ "$(uci -q get "network.$sec.disabled")" = "1" ]; then
+		if [ "$dev" = "br-wan.$vid" ]; then
+			uci set "network.$sec.device=wan"
+			uci -q delete "network.$sec.ifname"
+			[ -n "$sec6" ] && uci set "network.$sec6.device=wan"
+			uci commit network
+		fi
+		[ -e /sys/class/net/br-wan ] && nx54_bridge_down
+		echo "nx54-wan-vlan: WAN is disabled, leaving it on bare wan" >&2
+		nx54_lock_drop nx54-wan-vlan.prepare
+		return 0
+	fi
+
+	case "$dev" in
+	wan|"br-wan.$vid") ;;
+	*) die "WAN device is '$dev', not gmac0's 'wan'; nx54-wan-vlan only applies to the wired WAN (Wi-Fi relay does not need a VLAN)" ;;
+	esac
+
+	backup
+	echo "$sec $proto wan $vid" > "$BAK/state"
+
+	# Create the devices BEFORE touching the config: if the bridge tool or
+	# the wan netdev is missing, the WAN must stay on the bare interface
+	# instead of being pointed at a device that does not exist.
+	if ! nx54_bridge_up; then
+		# If the config already pointed at the VLAN device, do not leave it
+		# pointing at a device we just removed.
+		if [ "$dev" = "br-wan.$vid" ]; then
+			uci set "network.$sec.device=wan"
+			[ -n "$sec6" ] && [ "${dev6:-}" = "br-wan.$vid" ] && uci set "network.$sec6.device=wan"
+			uci commit network
+		fi
+		die "could not create br-wan.$vid (bridge tool missing, or wan not present)"
+	fi
+
+	changed=0
+	[ "$dev" = "br-wan.$vid" ] || changed=1
+	[ -n "$(uci -q get network.brwan)" ] && changed=1
+	[ -n "$(uci -q get network.wanvlan)" ] && changed=1
+	[ -n "$(uci -q get "network.$sec.ifname")" ] && changed=1
+	[ -n "$sec6" ] && [ "$dev6" = "$dev" ] && changed=1
+	if [ "$changed" = 1 ]; then
+		uci -q delete network.brwan
+		uci -q delete network.wanvlan
+		uci -q delete "network.$sec.ifname"
+		uci set "network.$sec.device=br-wan.$vid" || { nx54_bridge_down; die "uci set failed"; }
+		if [ -n "$sec6" ] && [ "$dev6" = "$dev" ]; then
+			uci set "network.$sec6.device=br-wan.$vid" || { nx54_bridge_down; die "uci set failed (IPv6)"; }
+		fi
+		uci commit network || { nx54_bridge_down; die "uci commit failed"; }
+	fi
+
+	echo "nx54-wan-vlan: br-wan (pvid $vid) + br-wan.$vid up; $sec -> br-wan.$vid"
+	nx54_lock_drop nx54-wan-vlan.prepare
+}
+
+setup() {
+	local vid=${1:-$VID_DEFAULT}
+	prepare "$vid"
+	[ "${NX54_NO_RELOAD:-0}" = "1" ] && return 0
+	/etc/init.d/network reload
+	sleep 2
+	echo "nx54-wan-vlan: network reloaded, wan now on br-wan.$vid"
+}
+
+sqm() {
+	local vid wan
+	vid=$(nx54_vid)
+	wan="br-wan.$vid"
+	[ -e "/sys/class/net/$wan" ] || die "$wan is not present"
+	[ -f /etc/config/sqm ] || return 0
+	for s in $(uci show sqm | sed -n "s/^sqm\.\([^.=]*\)=queue$/\1/p"); do
+		case "$(uci -q get "sqm.$s.interface")" in
+		wan|br-wan|br-wan.*) uci set "sqm.$s.interface=$wan" ;;
+		esac
+	done
+	uci commit sqm
+	/etc/init.d/sqm restart
+	sleep 3
+	echo "--- tc qdisc on $wan ---"
+	tc qdisc show dev "$wan" 2>/dev/null || true
+	echo "--- ingress redirect ---"
+	tc filter show dev "$wan" parent ffff: 2>/dev/null || true
+	echo "--- NSS counters ---"
+	nss-status 2>/dev/null | sed -n '/ports:/,/to host/p' || true
+}
+
+status() {
+	local vid wdev
+	vid=$(nx54_vid)
+	wdev="br-wan.$vid"
+	echo "=== $wdev ==="
+	ip -d link show br-wan 2>/dev/null || echo "no br-wan"
+	ip -d link show "$wdev" 2>/dev/null || echo "no $wdev"
+	sec=$(nx54_wan_section) || sec=wan
+	ubus call "network.interface.$sec" status 2>/dev/null | jsonfilter -e '@.up' -e '@["ipv4-address"][0].address' 2>/dev/null || true
+}
+
+rollback() {
+	local sec
+	[ -d "$BAK" ] || die "nothing to roll back"
+	sec=$(nx54_wan_section) || sec=wan
+	mkdir -p /etc/config
+	[ -f "$BAK/network" ] && cp "$BAK/network" /etc/config/network
+	[ -f "$BAK/sqm" ] && cp "$BAK/sqm" /etc/config/sqm
+	uci -q delete network.brwan
+	uci -q delete network.wanvlan
+	uci set "network.$sec.device=wan"
+	[ -n "$(nx54_wan6_section "$sec")" ] && uci set "network.$(nx54_wan6_section "$sec").device=wan"
+	uci -q delete "network.$sec.ifname"
+	uci commit network
+	nx54_bridge_down
+	/etc/init.d/network reload
+	/etc/init.d/sqm restart 2>/dev/null || true
+	echo "nx54-wan-vlan: restored bare wan and deleted br-wan"
+}
+
+# Boot fallback / runtime repair.  On a normal wired boot the S18 init has
+# already run prepare before netifd; autoconf then only has to verify.
+autoconf() {
+	local sec dev wdev vid
+	vid=$(nx54_vid)
+	wdev="br-wan.$vid"
+
+	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "h3c,magic-nx54" ] || return 0
+	[ -e /sys/class/net/wan ] || return 0
+
+	sec=$(nx54_wan_section) || return 0
+	[ "$(uci -q get "network.$sec.proto")" = "none" ] && return 0
+	[ "$(uci -q get "network.$sec.disabled")" = "1" ] && return 0
+	dev=$(nx54_wan_device)
+
+	case "$dev" in
+	"$wdev")
+		if [ ! -e "/sys/class/net/$wdev" ] && ! nx54_bridge_up; then
+			uci set "network.$sec.device=wan"
+			[ -n "$(nx54_wan6_section "$sec")" ] && uci set "network.$(nx54_wan6_section "$sec").device=wan"
+			uci -q delete "network.$sec.ifname"
+			uci commit network
+			return 1
+		fi
+		# Keep the marker in sync even if it was lost across a boot.
+		[ -e "/sys/class/net/$wdev" ] && : > /var/run/nx54-wan-vlan.expected
+		return 0
+		;;
+	wan)
+		# Wired WAN but no VLAN (boot without S18, or switched back from
+		# relay at runtime): prepare and reload netifd.
+		nx54_lock_take nx54-wan-vlan.autoconf || return 0
+		trap 'nx54_lock_drop nx54-wan-vlan.autoconf' EXIT INT TERM
+		if prepare "$vid" >>/tmp/nx54-wan-vlan.log 2>&1 &&
+		   [ -e "/sys/class/net/$wdev" ]; then
+			/etc/init.d/network reload
+			sleep 2
+			sqm >>/tmp/nx54-wan-vlan.log 2>&1
+			logger -t nx54-wan-vlan "WAN is on $wdev; the download shaper has a VLAN node"
+		else
+			logger -t nx54-wan-vlan "setting up $wdev failed; see /tmp/nx54-wan-vlan.log"
+			return 1
+		fi
+		return 0
+		;;
+	esac
+
+	# Relay / WISP / other device: no bridge of ours should exist.
+	nx54_bridge_down
+	return 0
+}
+
+case "$1" in
+prepare) shift; prepare "$@" ;;
+setup) shift; setup "$@" ;;
+autoconf) autoconf ;;
+sqm) sqm ;;
+status) status ;;
+rollback) rollback ;;
+*) echo "usage: $0 {prepare [vid]|setup [vid]|autoconf|sqm|status|rollback}" >&2; exit 1 ;;
+esac

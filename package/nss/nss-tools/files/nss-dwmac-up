@@ -278,6 +278,9 @@ pbuf_tune
 # takeover just created. Loaded any earlier, that lookup fails silently,
 # the VLANs stay host-only and the firmware drops all tagged ingress
 # (measured: E126 vs the working E128 flow).
+# The bridge manager is what makes Wi-Fi <-> wired / WDS bridging offloadable;
+# it has no /etc/modules.d entry, so load it here once the driver is up.
+modprobe qca-nss-bridge-mgr 2>/dev/null || true
 modprobe qca-nss-vlan 2>/dev/null
 
 # The PPPoE manager registers each PPPoE session with the firmware as it
@@ -409,6 +412,15 @@ sqm_start_missed() {
   done
 }
 sqm_start_missed
+
+# First boot only: move the wired WAN onto a local VLAN so the download
+# shaper has a VLAN node.  Run it synchronously: this is a procd oneshot
+# instance, so a background child would be reaped when the instance exits.
+# The helper only creates the bridge and reloads netifd (no 60 s wait, no
+# rollback), so the extra ~2 s here is harmless.
+if [ -x /usr/sbin/nx54-wan-vlan ]; then
+  /usr/sbin/nx54-wan-vlan autoconf >>/tmp/nx54-wan-vlan.log 2>&1 || true
+fi
 
 # Everything is registered by now - the NSS queues at the arm, the copy
 # engines at ath11k probe - so this is the first moment the interrupts

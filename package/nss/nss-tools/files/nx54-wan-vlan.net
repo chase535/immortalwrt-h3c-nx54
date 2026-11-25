@@ -1,0 +1,46 @@
+#!/bin/sh
+# Netdev hotplug: if br-wan is removed while the WAN is supposed to be up
+# (netifd deciding an "external" device is not its business, a stray reload,
+# or a manual ip link del), put it back.
+#
+# Event driven on purpose: a 30 s polling watchdog would also have to guess
+# when a user really wants the interface down.  Here we only repair when
+# network.interface.wan reports up, so a normal ifdown is left alone and the
+# following ifup rebuilds through hotplug.d/iface.
+[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "h3c,magic-nx54" ] || exit 0
+. /lib/nx54-wan-vlan.sh
+vid=$(nx54_vid)
+wdev="br-wan.$vid"
+sec=$(nx54_wan_section) || sec=wan
+
+# The WAN netdev showed up after S18 (slow probe, module load).  Create the
+# bridge now instead of having S18 block the boot waiting for it.
+if [ "$ACTION" = "add" ] && [ "$INTERFACE" = "wan" ]; then
+	case "$(nx54_wan_device)" in
+	wan|"$wdev") ;;
+	*) exit 0 ;;
+	esac
+	[ "$(uci -q get nss.general.enabled)" = "0" ] && exit 0
+	[ -e /sys/class/net/br-wan ] && exit 0
+	logger -t nx54-wan-vlan "wan appeared - creating $wdev"
+	/usr/sbin/nx54-wan-vlan prepare "$vid" >>/tmp/nx54-wan-vlan.log 2>&1
+	[ -e "/sys/class/net/$wdev" ] || exit 0
+	if ubus list "network.interface.$sec" >/dev/null 2>&1; then
+		ubus call network reload 2>/dev/null
+	fi
+	exit 0
+fi
+
+[ "$ACTION" = "remove" ] || exit 0
+[ "$INTERFACE" = "br-wan" ] || exit 0
+[ "$(nx54_wan_device)" = "$wdev" ] || exit 0
+
+# The marker is written when we create the bridge and removed by our own
+# teardown.  Present => somebody else removed it while it is still expected;
+# absent => this is our own deletion (or shutdown, see the init stop hook).
+[ -e /var/run/nx54-wan-vlan.expected ] || exit 0
+
+logger -t nx54-wan-vlan "br-wan disappeared while wan is up - recreating it"
+nx54_bridge_up || logger -t nx54-wan-vlan "could not recreate $wdev"
+ubus call "network.interface.$sec" up 2>/dev/null
+exit 0

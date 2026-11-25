@@ -1,0 +1,65 @@
+#!/bin/sh /etc/rc.common
+# Create the local WAN VLAN before netifd reads the config.
+#
+# The bridge is deliberately NOT a netifd device section: we create br-wan
+# (vlan_filtering, wan as untagged PVID port) and br-wan.<vid> with ip/bridge
+# here, and netifd only sees br-wan.<vid> in network.wan.device.  Benefits:
+# no netifd-owned bridge to clean up, no stale device records, cleanup is one
+# "ip link del br-wan", and no network reload during boot.
+#
+# Only for the H3C NX54 and only for a wired WAN.  Wi-Fi relay / WISP keeps
+# its STA netdev and never gets the bridge.
+START=18
+STOP=95
+
+. /lib/nx54-wan-vlan.sh
+
+stop() {
+	# Do not let the netdev-remove handler try to recreate the bridge while
+	# the system is shutting down.
+	rm -f /var/run/nx54-wan-vlan.expected
+}
+
+start() {
+	local dev vid wdev nss sec
+	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "h3c,magic-nx54" ] || return 0
+	vid=$(nx54_vid)
+	wdev="br-wan.$vid"
+	sec=$(nx54_wan_section) || sec=wan
+	dev=$(nx54_wan_device)
+	nss=$(uci -q get nss.general.enabled) || nss=""
+
+	# Drop the sections older versions used to let netifd own the bridge.
+	if [ -n "$(uci -q get network.brwan)" ] || [ -n "$(uci -q get network.wanvlan)" ]; then
+		uci -q delete network.brwan
+		uci -q delete network.wanvlan
+		uci commit network
+	fi
+
+	case "$dev" in
+	wan|"$wdev")
+		if [ "$nss" = "0" ]; then
+			# Host stack: the VLAN is not needed, put the WAN back.
+			if [ "$dev" != "wan" ] || [ -n "$(uci -q get "network.$sec.ifname")" ]; then
+				uci set "network.$sec.device=wan"
+				uci -q delete "network.$sec.ifname"
+				uci commit network
+			fi
+			nx54_bridge_down
+			logger -t nx54-wan-vlan "NSS disabled: WAN moved back to bare wan"
+		elif [ ! -e /sys/class/net/wan ]; then
+			# Do not block boot for a netdev that may appear later; the
+			# hotplug.d/net add handler creates the bridge when it does.
+			logger -t nx54-wan-vlan "wan not present yet - deferring the WAN VLAN"
+		else
+			NX54_NO_RELOAD=1 /usr/sbin/nx54-wan-vlan prepare "$vid" >>/tmp/nx54-wan-vlan.log 2>&1 ||
+				logger -t nx54-wan-vlan "prepare failed; see /tmp/nx54-wan-vlan.log"
+		fi
+		;;
+	*)
+		# Relay / WISP / no WAN section: no bridge of ours.
+		[ -e /sys/class/net/br-wan ] && nx54_bridge_down
+		;;
+	esac
+
+}

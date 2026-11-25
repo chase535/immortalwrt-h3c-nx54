@@ -56,7 +56,7 @@ define Package/nss-tools-dwmac
 	+kmod-qca-nss-ecm +kmod-qca-nss-drv-vlan-mgr \
 	+TARGET_qualcommax_ipq50xx:kmod-qca8337-nss \
 	+TARGET_qualcommax_ipq50xx:kmod-rtl8367s-nss \
-	+TARGET_qualcommax_ipq50xx:kmod-qca-dsa-nss +ip-full
+	+TARGET_qualcommax_ipq50xx:kmod-qca-dsa-nss +ip-full +ip-bridge
   CONFLICTS:=nss-tools
   PKGARCH:=all
 endef
@@ -117,8 +117,19 @@ define Package/nss-tools/install
 	$(INSTALL_BIN) ./files/edma-dump $(1)/usr/sbin/edma-dump
 	$(INSTALL_BIN) ./files/nss-wedge-watch $(1)/usr/sbin/nss-wedge-watch
 	$(INSTALL_BIN) ./files/nss-ppe-diff $(1)/usr/sbin/nss-ppe-diff
+	$(INSTALL_BIN) ./files/nx54-wan-vlan $(1)/usr/sbin/nx54-wan-vlan
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/nx54-wan-vlan.init $(1)/etc/init.d/nx54-wan-vlan
+	$(INSTALL_DIR) $(1)/etc/rc.d
+	$(LN) ../init.d/nx54-wan-vlan $(1)/etc/rc.d/S18nx54-wan-vlan
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_BIN) ./files/nx54-wan-cleanup.hotplug $(1)/etc/hotplug.d/iface/90-nx54-wan-cleanup
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
+	$(INSTALL_BIN) ./files/nx54-wan-vlan.net $(1)/etc/hotplug.d/net/90-nx54-wan-vlan
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/nss.init $(1)/etc/init.d/nss
+	$(INSTALL_DIR) $(1)/lib
+	$(INSTALL_DATA) ./files/nx54-wan-vlan.sh $(1)/lib/nx54-wan-vlan.sh
 	$(INSTALL_DIR) $(1)/lib/nss
 	$(INSTALL_DATA) ./files/functions.sh $(1)/lib/nss/functions.sh
 	$(INSTALL_DIR) $(1)/etc/sysctl.d
@@ -135,8 +146,19 @@ define Package/nss-tools-dwmac/install
 	$(INSTALL_BIN) ./files/nss-irq-affinity $(1)/usr/sbin/nss-irq-affinity
 	$(INSTALL_BIN) ./files/nss-dwmac-probe $(1)/usr/sbin/nss-dwmac-probe
 	$(INSTALL_BIN) ./files/nss-status $(1)/usr/sbin/nss-status
+	$(INSTALL_BIN) ./files/nx54-wan-vlan $(1)/usr/sbin/nx54-wan-vlan
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/nx54-wan-vlan.init $(1)/etc/init.d/nx54-wan-vlan
+	$(INSTALL_DIR) $(1)/etc/rc.d
+	$(LN) ../init.d/nx54-wan-vlan $(1)/etc/rc.d/S18nx54-wan-vlan
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
+	$(INSTALL_BIN) ./files/nx54-wan-cleanup.hotplug $(1)/etc/hotplug.d/iface/90-nx54-wan-cleanup
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
+	$(INSTALL_BIN) ./files/nx54-wan-vlan.net $(1)/etc/hotplug.d/net/90-nx54-wan-vlan
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/nss-dwmac.init $(1)/etc/init.d/nss
+	$(INSTALL_DIR) $(1)/lib
+	$(INSTALL_DATA) ./files/nx54-wan-vlan.sh $(1)/lib/nx54-wan-vlan.sh
 	$(INSTALL_DIR) $(1)/lib/nss
 	$(INSTALL_DATA) ./files/functions.sh $(1)/lib/nss/functions.sh
 	$(INSTALL_DIR) $(1)/etc/sysctl.d

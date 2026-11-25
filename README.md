@@ -19,6 +19,7 @@
 | 5 GHz（QCN9074 PCIe，NSS 卸载） | ✅ 已验证 |
 | CPU 频率（1008 / 1296 MHz） | ✅ LuCI 可切换 |
 | NSS ECM / VLAN / PPPoE / SQM | ✅ 已集成 |
+| WAN 本地 VLAN（NSS 下载整形） | ✅ 自动配置（S18 + hotplug） |
 | SSH / SFTP（Dropbear + OpenSSH SFTP subsystem） | ✅ 已集成 |
 | LuCI 中文、Argon 主题、TurboACC、UPnP、DDNS | ✅ 已集成 |
 | 长时间满负载稳定性 | ⚠️ 未进行稳定性验证 |
@@ -63,7 +64,7 @@
 - 文本/编辑：`vim`、`nano`、`less`、`jq`、`findutils`（`find`/`locate`/`xargs`）、`logrotate`
 - 压缩/归档：`tar`（GNU）、`xz`、`xz-utils`、`zstd`、`unzip`、`bzip2`、`pv`
 - 系统：`htop`、`procps-ng`、`screen`、`lsof`、`socat`、`rsync`、`flock`、`coreutils-timeout`
-- 网络：`curl`、`wget-ssl`、`uclient-fetch`、`openssl-util`、`ca-bundle`、`mtr-nojson`、`ethtool`、`ip-full`、`tc-full`、`iw`
+- 网络：`curl`、`wget-ssl`、`uclient-fetch`、`openssl-util`、`ca-bundle`、`mtr-nojson`、`ethtool`、`ip-full`、`ip-bridge`、`tc-full`、`iw`
 
 **网络服务**
 
@@ -213,6 +214,24 @@ sysupgrade -n /tmp/…-sysupgrade.bin
   可在 **System → CPU Freq** 里设置 governor、最小/最大频率。1296 MHz 是超出额定的 boost 档，
   散热不佳或追求绝对稳定时，把最大频率固定为 `1008000` 即可。
 
+## WAN 本地 VLAN（NSS 下载整形）
+
+NX54 的 WAN 是独立的 gmac0，没有交换机 conduit。`nss-edma.qos` 做下载整形时，
+IFB 回注的包需要一个 VLAN 节点才能重新进入固件加速路径；因此在 **WAN 上套一层本地 VLAN**：
+
+- `br-wan`（`vlan_filtering=1`，`wan` 作为 untagged 口，PVID 35）+ `br-wan.35`；
+- `network.wan.device` 指向 `br-wan.35`，DHCP/PPPoE 都跑在它上面；
+- **线上仍是 untagged**：桥内部打 tag、出方向剥 tag，MTU 和 ISP 侧不变；
+- 自 2026-11-25 起，`br-wan` **不由 netifd 拥有**，由脚本用 `ip`/`bridge` 在 netifd 启动前创建（`S18nx54-wan-vlan`），
+  netifd 只把 `br-wan.35` 当外部设备使用；清理只需 `ip link del br-wan`；
+- 启动时 `wan` 未就绪不会阻塞，`hotplug.d/net` 的 `add wan` 会补建；
+- 有线 ↔ Wi-Fi 中继/WISP 切换由 `hotplug.d/iface` 自动处理：切中继删桥释放 WAN 口，切回有线重建；
+- 修改 VID 可用 `uci set nss.general.wan_vlan_id=35`（默认 35，范围 1–4094）；
+- 依赖 `ip-bridge` 包（提供 `/usr/sbin/bridge`），已在 `nss-tools-dwmac` 的 `DEPENDS` 中。
+
+> 这层 VLAN 只对 NSS 下载整形有意义；不用 SQM/只做上传整形时也可保留，不影响正常上网。
+> NSS 关闭（`nss.general.enabled=0`）时 S18 会把它拆掉、WAN 回到裸 `wan`；重新开启并重启后自动恢复。
+
 ## 目录
 
 | 路径 | 内容 |
@@ -221,7 +240,7 @@ sysupgrade -n /tmp/…-sysupgrade.bin
 | `target/linux/qualcommax/dts/` | NX54 板级 DTS、QCN6122/WCSS、NSS DTSI |
 | `target/linux/qualcommax/ipq50xx/base-files/` | MAC/caldata/network/upgrade 脚本 |
 | `package/kernel/mac80211/` | ath11k NSS/WiFi 补丁集 |
-| `package/nss/`、`package/kernel/qca-*` | NSS 工具（nss-tools/nssinfo）与 stmmac claim / DSA qca8k 胶水 |
+| `package/nss/`、`package/kernel/qca-*` | NSS 工具（nss-tools/nssinfo）、WAN VLAN 脚本（`nx54-wan-vlan*`）与 stmmac claim / DSA qca8k 胶水 |
 | `package/luci-app-turboacc/` | NSS 开关与加速设置（含互斥逻辑） |
 | `feed-patches/` | feeds 侧补丁（SQM nss-edma 联动） |
 | `.github/ci/nx54.config` | CI 使用的完整配置 |

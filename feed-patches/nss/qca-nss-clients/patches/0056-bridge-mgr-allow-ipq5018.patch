@@ -1,0 +1,11 @@
+--- a/bridge/nss_bridge_mgr.c
++++ b/bridge/nss_bridge_mgr.c
+@@ -608,7 +608,7 @@
+ 	/*
+ 	 * Monitor bridge activity only on supported platform
+ 	 */
+-	if (!of_machine_is_compatible("qcom,ipq807x") && !of_machine_is_compatible("qcom,ipq6018") && !of_machine_is_compatible("qcom,ipq8074"))
++	if (!of_machine_is_compatible("qcom,ipq807x") && !of_machine_is_compatible("qcom,ipq6018") && !of_machine_is_compatible("qcom,ipq8074") && !of_machine_is_compatible("qcom,ipq5018"))
+ 		return 0;
+ 
+ 	INIT_LIST_HEAD(&br_mgr_ctx.list);

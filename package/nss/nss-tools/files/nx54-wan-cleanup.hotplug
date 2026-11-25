@@ -1,0 +1,48 @@
+#!/bin/sh
+# Runtime relay <-> wired WAN switch.  The bridge is not a netifd device, so
+# "cleanup" here is just deleting/creating netdevs and pointing
+# network.wan.device at the right place.
+[ "$ACTION" = "ifup" ] || [ "$ACTION" = "ifupdate" ] || [ "$ACTION" = "ifdown" ] || exit 0
+[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "h3c,magic-nx54" ] || exit 0
+
+. /lib/nx54-wan-vlan.sh
+vid=$(nx54_vid)
+wdev="br-wan.$vid"
+dev=$(nx54_wan_device)
+
+case "$dev" in
+"$wdev")
+	# Wired, already on the VLAN: make sure the devices survived a reload.
+	# Never do this on ifdown -- that would fight a deliberate interface-down.
+	case "$ACTION" in
+	ifdown) exit 0 ;;
+	esac
+	[ -e "/sys/class/net/$wdev" ] || /usr/sbin/nx54-wan-vlan prepare "$vid" >>/tmp/nx54-wan-vlan.log 2>&1
+	exit 0
+	;;
+wan)
+	# Switched back from relay at runtime: rebuild the VLAN and move the
+	# L3 onto it.  prepare is PID-locked and idempotent, so no uptime guard
+	# is needed; the reload is only done when the config actually changed.
+	case "$ACTION" in ifdown) exit 0 ;; esac
+	[ "$(uci -q get nss.general.enabled)" = "0" ] && exit 0
+	[ -e "/sys/class/net/$wdev" ] && exit 0
+	nx54_lock_take nx54-wan-vlan.iface || exit 0
+	trap 'nx54_lock_drop nx54-wan-vlan.iface' EXIT INT TERM
+	logger -t nx54-wan-vlan "wired WAN without $wdev - re-applying the local VLAN"
+	/usr/sbin/nx54-wan-vlan prepare "$vid" >>/tmp/nx54-wan-vlan.log 2>&1
+	if [ -e "/sys/class/net/$wdev" ]; then
+		ubus call network reload 2>/dev/null
+	fi
+	exit 0
+	;;
+esac
+
+# Relay / WISP / no WAN: no bridge of ours, and no legacy sections.
+[ -n "$(uci -q get network.brwan)" ] || [ -n "$(uci -q get network.wanvlan)" ] && {
+	uci -q delete network.brwan
+	uci -q delete network.wanvlan
+	uci commit network
+}
+[ -e /sys/class/net/br-wan ] && nx54_bridge_down
+exit 0

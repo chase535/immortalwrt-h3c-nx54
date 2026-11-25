@@ -67,6 +67,15 @@
 		qcom,tunipip6-enabled;
 		qcom,shaping-enabled;
 		/*
+		 * Gates nss_bridge_init() in nss_hal.c.  Without it the bridge
+		 * handler and dynamic-interface entry stay unset while
+		 * qca-nss-bridge-mgr still registers bridges, and the first
+		 * synchronous bridge message takes down() on a zeroed
+		 * semaphore (kernel panic).  Keep it enabled whenever the
+		 * bridge manager is loaded.
+		 */
+		qcom,bridge-enabled;
+		/*
 		 * Gates nss_vlan_register_handler(), which is what initialises
 		 * the VLAN message semaphore. Without it the first VLAN message
 		 * from the vlan manager takes an uninitialised semaphore and
