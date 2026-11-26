@@ -43,20 +43,16 @@ return view.extend({
 		var qdiscs = data[0],
 		    scripts = data[1];
 
-		/* The NSS firmware owns the data path when the offload is on: the
-		 * generic qdiscs never see those packets, so nss-edma is the only
-		 * usable choice and must be the only one offered. With the offload
-		 * off the opposite holds. */
+		/* The NSS firmware owns the data path when the offload is on, so only
+		 * nss-edma.qos can shape it; when it is off nss-edma.qos is useless.
+		 * Its qdisc field is ignored (the script installs its own nsstbl /
+		 * nssprio + nssfq_codel tree), so keep offering the real qdiscs. */
 		var nssOn = ((uci.get('nss', 'general', 'enabled') || '1') != '0');
 		var haveNss = scripts.some(function(s) { return s[0] == 'nss-edma.qos'; });
-		if (nssOn && haveNss) {
-			qdiscs = [{ name: 'nss-edma' }];
+		if (nssOn && haveNss)
 			scripts = scripts.filter(function(s) { return s[0] == 'nss-edma.qos'; });
-		}
-		else {
-			qdiscs = qdiscs.filter(function(q) { return q.name != 'nss-edma'; });
+		else
 			scripts = scripts.filter(function(s) { return s[0] != 'nss-edma.qos'; });
-		}
 
 		if (qdiscs.length === 0) {
 			ui.addNotification(null,

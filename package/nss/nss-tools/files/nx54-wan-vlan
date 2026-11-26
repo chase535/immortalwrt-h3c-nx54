@@ -18,7 +18,7 @@
 #   nx54-wan-vlan prepare [vid]  write the config and create the devices (no reload)
 #   nx54-wan-vlan setup [vid]    prepare + network reload (manual use)
 #   nx54-wan-vlan autoconf       bring the current boot in line (boot fallback)
-#   nx54-wan-vlan sqm            point the SQM queues at br-wan.<vid>
+#   nx54-wan-vlan sqm            point the SQM queues at the physical WAN port
 #   nx54-wan-vlan status         show the bridge, VLAN, addresses and counters
 #   nx54-wan-vlan rollback       move the WAN back to bare wan and delete br-wan
 
@@ -124,23 +124,24 @@ setup() {
 }
 
 sqm() {
-	local vid wan
+	local vid wanport
 	vid=$(nx54_vid)
-	wan="br-wan.$vid"
-	[ -e "/sys/class/net/$wan" ] || die "$wan is not present"
+	# nss-edma.qos wants the physical WAN port (the DSA port), not the
+	# bridge/VLAN stack on top of it: it walks the port's lower links to the
+	# conduit, then shapes a lane there and steers the port's flows into it.
+	wanport=$(ls /sys/class/net/br-wan/brif 2>/dev/null | head -n1)
+	[ -n "$wanport" ] || die "br-wan has no port"
 	[ -f /etc/config/sqm ] || return 0
 	for s in $(uci show sqm | sed -n "s/^sqm\.\([^.=]*\)=queue$/\1/p"); do
 		case "$(uci -q get "sqm.$s.interface")" in
-		wan|br-wan|br-wan.*) uci set "sqm.$s.interface=$wan" ;;
+		wan|br-wan|br-wan.*) uci set "sqm.$s.interface=$wanport" ;;
 		esac
 	done
 	uci commit sqm
 	/etc/init.d/sqm restart
 	sleep 3
-	echo "--- tc qdisc on $wan ---"
-	tc qdisc show dev "$wan" 2>/dev/null || true
-	echo "--- ingress redirect ---"
-	tc filter show dev "$wan" parent ffff: 2>/dev/null || true
+	echo "--- sqm ports ---"
+	uci show sqm | sed -n "/\.interface=/p"
 	echo "--- NSS counters ---"
 	nss-status 2>/dev/null | sed -n '/ports:/,/to host/p' || true
 }

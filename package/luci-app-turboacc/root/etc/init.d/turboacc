@@ -75,24 +75,27 @@ apply_nss() {
 	sqm_follow_nss
 }
 
-# Keep SQM on the qdisc that matches the offload state: nss-edma schedules in
-# the NSS firmware, the generic qdiscs only see host traffic. Rewrite the
-# stored value and reload sqm so a toggle needs no manual visit to SQM.
+# Keep SQM on the script that matches the offload state: nss-edma schedules
+# in the NSS firmware, the generic qdiscs only see host traffic. The qdisc
+# field is ignored by nss-edma.qos (it installs nsstbl/nssprio + nssfq_codel
+# itself), so never write a fake qdisc name there; only migrate the old
+# sentinel back to a real one.
 sqm_follow_nss() {
 	[ -x /etc/init.d/sqm ] || return 0
-	local sec script qdisc
-	if [ "$nss_enabled" = "1" ]; then
-		script=nss-edma.qos; qdisc=nss-edma
-	else
-		script=piece_of_cake.qos; qdisc=cake
-	fi
+	local sec cur
 	for sec in $(uci -q show sqm | sed -n 's/^sqm\.\([^.=]*\)=queue$/\1/p'); do
-		uci -q set "sqm.$sec.script=$script"
-		uci -q set "sqm.$sec.qdisc=$qdisc"
+		if [ "$nss_enabled" = "1" ]; then
+			uci -q set "sqm.$sec.script=nss-edma.qos"
+			cur=$(uci -q get "sqm.$sec.qdisc")
+			[ "$cur" = "nss-edma" ] && uci -q set "sqm.$sec.qdisc=cake"
+		else
+			uci -q set "sqm.$sec.script=piece_of_cake.qos"
+			uci -q set "sqm.$sec.qdisc=cake"
+		fi
 	done
 	uci -q commit sqm
 	/etc/init.d/sqm reload >/dev/null 2>&1
-	logger -t turboacc "SQM switched to $script ($qdisc)"
+	logger -t turboacc "SQM switched for NSS offload=$nss_enabled"
 }
 
 start(){

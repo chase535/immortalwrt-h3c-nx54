@@ -6,4 +6,5 @@ src-git video https://github.com/openwrt/video.git
 #src-git targets https://github.com/openwrt/targets.git
 #src-git oldpackages http://git.openwrt.org/packages.git
 #src-link custom /usr/src/openwrt/custom-feed
-src-git nss https://github.com/kuncy7/nss-packages.git;ipq50xx-rebase
+# Pinned: the branch moves; our changes to this feed live in feed-patches/nss/.
+src-git nss https://github.com/kuncy7/nss-packages.git^be1d4f543435957e1214183b66c598b2779872d5

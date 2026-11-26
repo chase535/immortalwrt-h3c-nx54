@@ -1,21 +1,24 @@
 --- a/src/run-openwrt.sh
---- b/src/run-openwrt.sh
-@@ -66,6 +66,23 @@
++++ b/src/run-openwrt.sh
+@@ -66,6 +66,26 @@
      export TARGET=$(config_get "$section" target)
      export QDISC=$(config_get "$section" qdisc)
      export SCRIPT=$(config_get "$section" script)
 +
 +    # The NSS firmware offloads the data path, so the generic qdiscs
 +    # (cake/fq_codel/htb) never see the offloaded packets and the shaping
-+    # silently does nothing. When the offload is on, force the NSS qdisc that
-+    # schedules in the firmware instead (sqm-scripts-nss ships it).
++    # silently does nothing. Force the script that schedules in the firmware
++    # instead (sqm-scripts-nss ships it). Its qdisc field is ignored: the
++    # script installs nsstbl/nssprio + nssfq_codel itself, so keep a real
++    # qdisc name there instead of inventing one.
 +    if [ -f "${SQM_LIB_DIR}/nss-edma.qos" ] &&
 +       [ -e /sys/module/qca_nss_drv ] &&
 +       [ "$(uci -q get nss.general.enabled)" != "0" ]; then
 +        [ "${SCRIPT}" = "nss-edma.qos" ] ||
 +            sqm_log "NSS offload is enabled: using nss-edma.qos instead of ${SCRIPT}"
 +        SCRIPT=nss-edma.qos
-+        QDISC=nss-edma
++        # Migrate the old bogus sentinel; nss-edma.qos does not read QDISC.
++        [ "${QDISC}" = "nss-edma" ] && QDISC=cake
 +    elif [ "${SCRIPT}" = "nss-edma.qos" ]; then
 +        sqm_log "NSS offload is disabled: falling back to piece_of_cake.qos"
 +        SCRIPT=piece_of_cake.qos
