@@ -203,8 +203,9 @@ sysupgrade -n /tmp/…-sysupgrade.bin
 
 - **NSS 与软件加速互斥**：NSS 开启时，软件流量分载、硬件/Shortcut-FE 流卸载、全锥形 NAT
   （含 IPv6）会被强制关闭并在 TurboACC 页面隐藏。要使用 fullcone 需先关闭 NSS。
-- **NSS 开启时 SQM 只认 `nss-edma`**：SQM 的队列脚本/Qdisc 只提供 `nss-edma`；
-  切换 NSS 开关会自动改写 SQM 配置并重载，无需手动进 SQM 页面。
+- **NSS 开启时 SQM 的队列脚本固定为 `nss-edma.qos`**：Qdisc 仍选真实 qdisc（`cake`、`fq_codel` 等）；
+  `nss-edma.qos` 会忽略 Qdisc 字段，自行安装 `nsstbl`/`nssprio` + `nssfq_codel`。不要选/输入
+  `nss-edma` 作为 qdisc。切换 NSS 开关会自动改写 SQM 脚本并重载，无需手动进 SQM 页面。
 - **DFS / 160 MHz**：默认 5G 为 `ch36 / HE80`（非 DFS）。160 MHz 必然覆盖 52–64 的 DFS 段；
   当前默认未设置 `country`，`ieee80211h` 不会写进 hostapd，DFS 信道不可用。要开 160 MHz
   需设置 `wireless.radio1.country`（如 `CN`），并接受 CAC（普通 60s、气象 600s，检测到雷达
@@ -220,8 +221,12 @@ NX54 的 WAN 是独立的 gmac0，没有交换机 conduit。`nss-edma.qos` 做�
 IFB 回注的包需要一个 VLAN 节点才能重新进入固件加速路径；因此在 **WAN 上套一层本地 VLAN**：
 
 - `br-wan`（`vlan_filtering=1`，`wan` 作为 untagged 口，PVID 35）+ `br-wan.35`；
-- `network.wan.device` 指向 `br-wan.35`，DHCP/PPPoE 都跑在它上面；
+- `network.wan.device` 与 `network.wan6.device` 都指向 `br-wan.35`；`wan`/`wan6` 只是同一
+  VLAN 设备上的 IPv4/IPv6 逻辑接口，**不是桥端口**，不会出现在 `bridge vlan show` 的端口列表里；
 - **线上仍是 untagged**：桥内部打 tag、出方向剥 tag，MTU 和 ISP 侧不变；
+- 建桥时设 `vlan_default_pvid=0`，并删除 `wan`/`br-wan` 上的 VLAN 1；最终只保留 VID 35：
+  `wan 35 PVID Egress Untagged`、`br-wan 35`（self，tagged）。self VID 在 `br-wan.35`
+  创建之后添加，避免 `ip link add ... type vlan` 因 VID 已存在而失败；
 - 自 2026-11-25 起，`br-wan` **不由 netifd 拥有**，由脚本用 `ip`/`bridge` 在 netifd 启动前创建（`S18nx54-wan-vlan`），
   netifd 只把 `br-wan.35` 当外部设备使用；清理只需 `ip link del br-wan`；
 - 启动时 `wan` 未就绪不会阻塞，`hotplug.d/net` 的 `add wan` 会补建；

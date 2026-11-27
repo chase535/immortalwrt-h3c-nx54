@@ -1,0 +1,59 @@
+--- a/nss_data_plane/nss_data_plane_common.c
++++ b/nss_data_plane/nss_data_plane_common.c
+@@ -17,6 +17,25 @@
+ #include <linux/netdevice.h>
+ #include "nss_data_plane.h"
+ #include "nss_core.h"
++#include <linux/module.h>
++
++/*
++ * Optional hook into qca-dwmac-nss.  Do not use an extern weak reference:
++ * gcc then emits a GOT relocation and the arm64 module loader rejects the
++ * module with "unsupported RELA relocation: 311".  Look the symbol up at
++ * run time instead.
++ */
++static void nss_data_plane_set_rearm_cb(void (*cb)(void))
++{
++	void *sym = __symbol_get("qca_dwmac_nss_set_rearm_cb");
++	void (*set_cb)(void (*)(void));
++
++	if (!sym)
++		return;
++	set_cb = (void (*)(void (*)(void)))sym;
++	set_cb(cb);
++	__symbol_put("qca_dwmac_nss_set_rearm_cb");
++}
+ 
+ static struct delayed_work nss_data_plane_work;
+ static struct workqueue_struct *nss_data_plane_workqueue;
+@@ -90,6 +109,11 @@
+ 	return NOTIFY_DONE;
+ }
+ 
++static void nss_data_plane_rearm_work(void)
++{
++	nss_data_plane_schedule_registration();
++}
++
+ static struct notifier_block nss_data_plane_netdev_nb = {
+ 	.notifier_call = nss_data_plane_netdev_event,
+ };
+@@ -107,6 +131,11 @@
+ 
+ 	INIT_DELAYED_WORK(&nss_data_plane_work, nss_data_plane_work_function);
+ 	register_netdevice_notifier(&nss_data_plane_netdev_nb);
++	/*
++	 * Hand the glue a direct re-registration hook: it owns fw_mask and must
++	 * trigger the loop after changing it, not rely on notifier ordering.
++	 */
++	nss_data_plane_set_rearm_cb(nss_data_plane_rearm_work);
+ 	return 0;
+ }
+ 
+@@ -116,5 +145,6 @@
+ void nss_data_plane_destroy_delay_work(void)
+ {
+ 	unregister_netdevice_notifier(&nss_data_plane_netdev_nb);
++	nss_data_plane_set_rearm_cb(NULL);
+ 	destroy_workqueue(nss_data_plane_workqueue);
+ }

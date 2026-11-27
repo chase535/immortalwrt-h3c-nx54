@@ -1,6 +1,6 @@
 --- a/src/run-openwrt.sh
 +++ b/src/run-openwrt.sh
-@@ -66,6 +66,26 @@
+@@ -66,6 +66,27 @@
      export TARGET=$(config_get "$section" target)
      export QDISC=$(config_get "$section" qdisc)
      export SCRIPT=$(config_get "$section" script)
@@ -13,7 +13,8 @@
 +    # qdisc name there instead of inventing one.
 +    if [ -f "${SQM_LIB_DIR}/nss-edma.qos" ] &&
 +       [ -e /sys/module/qca_nss_drv ] &&
-+       [ "$(uci -q get nss.general.enabled)" != "0" ]; then
++       [ "$(uci -q get nss.general.enabled)" != "0" ] &&
++       ! { [ "$IFACE" = "wan" ] && [ "$(uci -q get nss.general.wan_claim)" = "0" ]; }; then
 +        [ "${SCRIPT}" = "nss-edma.qos" ] ||
 +            sqm_log "NSS offload is enabled: using nss-edma.qos instead of ${SCRIPT}"
 +        SCRIPT=nss-edma.qos

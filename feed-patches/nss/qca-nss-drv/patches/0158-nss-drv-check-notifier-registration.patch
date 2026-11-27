@@ -1,0 +1,24 @@
+--- a/nss_data_plane/nss_data_plane_common.c
++++ b/nss_data_plane/nss_data_plane_common.c
+@@ -123,6 +123,8 @@
+  */
+ int nss_data_plane_init_delay_work(void)
+ {
++	int ret;
++
+ 	nss_data_plane_workqueue = create_singlethread_workqueue("nss_data_plane_workqueue");
+ 	if (!nss_data_plane_workqueue) {
+ 		nss_warning("Can't allocate workqueue\n");
+@@ -130,7 +132,11 @@
+ 	}
+ 
+ 	INIT_DELAYED_WORK(&nss_data_plane_work, nss_data_plane_work_function);
+-	register_netdevice_notifier(&nss_data_plane_netdev_nb);
++	ret = register_netdevice_notifier(&nss_data_plane_netdev_nb);
++	if (ret) {
++		destroy_workqueue(nss_data_plane_workqueue);
++		return ret;
++	}
+ 	/*
+ 	 * Hand the glue a direct re-registration hook: it owns fw_mask and must
+ 	 * trigger the loop after changing it, not rely on notifier ordering.

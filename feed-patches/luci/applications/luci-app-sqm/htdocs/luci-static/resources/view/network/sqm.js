@@ -43,15 +43,22 @@ return view.extend({
 		var qdiscs = data[0],
 		    scripts = data[1];
 
+		/* nss-edma is not a qdisc: nss-edma.qos installs nsstbl/nssprio +
+		 * nssfq_codel itself and ignores the qdisc field.  Drop any stale
+		 * sentinel so the UI cannot offer it as a real discipline. */
+		qdiscs = qdiscs.filter(function(q) { return q.name != 'nss-edma'; });
+
 		/* The NSS firmware owns the data path when the offload is on, so only
 		 * nss-edma.qos can shape it; when it is off nss-edma.qos is useless.
 		 * Its qdisc field is ignored (the script installs its own nsstbl /
 		 * nssprio + nssfq_codel tree), so keep offering the real qdiscs. */
 		var nssOn = ((uci.get('nss', 'general', 'enabled') || '1') != '0');
+		var wanHost = ((uci.get('nss', 'general', 'wan_claim') || '1') == '0');
 		var haveNss = scripts.some(function(s) { return s[0] == 'nss-edma.qos'; });
-		if (nssOn && haveNss)
+		var perSectionNss = nssOn && wanHost;
+		if (nssOn && haveNss && !wanHost)
 			scripts = scripts.filter(function(s) { return s[0] == 'nss-edma.qos'; });
-		else
+		else if (!nssOn)
 			scripts = scripts.filter(function(s) { return s[0] != 'nss-edma.qos'; });
 
 		if (qdiscs.length === 0) {
@@ -130,7 +137,10 @@ return view.extend({
 		for (var i=0; i < qdiscs.length; i++) {
 			o.value(qdiscs[i].name);
 		}
-		o.default = (nssOn && haveNss) ? "nss-edma" : "cake";
+		o.default = "cake";
+		o.load = function(section_id) {
+			this.default = "cake";
+		};
 		o.rmempty = false;
 
 		var qos_desc = "";
@@ -144,6 +154,22 @@ return view.extend({
 				qos_desc += "No help text</p>";
 		}
 		o.default = (nssOn && haveNss) ? "nss-edma.qos" : "piece_of_cake.qos";
+		o.load = function(section_id) {
+			/* value() appends to keylist; the render-time loop above has
+			 * already added every script, so reset both containers first or
+			 * the select ends up with every entry duplicated. */
+			this.keylist = [];
+			this.values = [];
+			var iface = uci.get('sqm', section_id, 'interface');
+			var hide = perSectionNss && iface == 'wan';
+			this.default = hide ? "piece_of_cake.qos" :
+				((nssOn && haveNss) ? "nss-edma.qos" : "piece_of_cake.qos");
+			for (var j = 0; j < scripts.length; j++) {
+				if (hide && scripts[j][0] == 'nss-edma.qos')
+					continue;
+				this.value(scripts[j][0]);
+			}
+		};
 		o.rmempty = false;
 		o.description = qos_desc;
 

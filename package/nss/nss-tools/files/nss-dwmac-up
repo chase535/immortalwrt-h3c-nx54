@@ -67,15 +67,29 @@ sleep 3
 if [ "$(cat $FWM 2>/dev/null)" = "0x0" ]; then
   MASK="$(uci -q get nss.general.fw_mask)" || MASK=''
   if [ -z "$MASK" ] && [ "$TOPOLOGY" = "dsa" ]; then
-    # C-3PO: netifd has run, so a GMAC that is up is one that is in use -
-    # the conduit and any WAN PHY of its own get armed, an unused GMAC or
-    # a second CPU port DSA does not use stay on the host.
+    # C-3PO: arm every standalone GMAC that has a netdev, whether it is up
+    # or already a bridge member; an idle GMAC in the mask costs nothing.
+    # A CPU port DSA gave no user port stays out.
     nss_dsa_fw_mask
     MASK="$NSS_FW_MASK"
     echo "topology dsa: fw_mask $MASK from the board (conduit ${NSS_CONDUIT:-none} = phys_if ${NSS_CONDUIT_IF:--}, GMACs $(nss_gmac_netdevs | tr '\n' ' '))"
   fi
   [ -n "$MASK" ] || MASK=0x2
+  # nss.general.wan_claim=0: the glue is loaded with an empty wan_ifname,
+  # but nss_dsa_fw_mask() above still counted the WAN GMAC.  Clear its bit
+  # here so the escape hatch really keeps the WAN on the host stack.
+  if [ "$(uci -q get nss.general.wan_claim)" = "0" ]; then
+    wi=$(awk -F: '$2 == "wan" { print $1; exit }' \
+      /sys/kernel/debug/qca-dwmac-nss/ifmap 2>/dev/null)
+    [ -n "$wi" ] && MASK=$(( MASK & ~(1 << wi) ))
+  fi
   echo "$MASK" > $FWM 2>/dev/null
+  logger -t nss "fw_mask written: requested $MASK, now $(cat $FWM 2>/dev/null)"
+  # nss-drv registers the data plane once, at core init; a mask written after
+  # that (a late arm, e.g. a port added at runtime) would stay ARMED.
+  # Ask it to run the registration loop again now that the mask is in place.
+  [ -w /sys/kernel/debug/qca-nss-drv/data_plane_register ] &&
+    echo 1 > /sys/kernel/debug/qca-nss-drv/data_plane_register 2>/dev/null
 fi
 
 # Wi-Fi offload is loaded from here, not from the service, because ath11k

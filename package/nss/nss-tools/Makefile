@@ -124,6 +124,8 @@ define Package/nss-tools/install
 	$(LN) ../init.d/nx54-wan-vlan $(1)/etc/rc.d/S18nx54-wan-vlan
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
 	$(INSTALL_BIN) ./files/nx54-wan-cleanup.hotplug $(1)/etc/hotplug.d/iface/90-nx54-wan-cleanup
+	$(INSTALL_BIN) ./files/nss-sqm-ifup.hotplug $(1)/etc/hotplug.d/iface/20-nss-sqm
+	$(INSTALL_BIN) ./files/nss-rearm $(1)/usr/sbin/nss-rearm
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
 	$(INSTALL_BIN) ./files/nx54-wan-vlan.net $(1)/etc/hotplug.d/net/90-nx54-wan-vlan
 	$(INSTALL_DIR) $(1)/etc/init.d
@@ -153,6 +155,8 @@ define Package/nss-tools-dwmac/install
 	$(LN) ../init.d/nx54-wan-vlan $(1)/etc/rc.d/S18nx54-wan-vlan
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
 	$(INSTALL_BIN) ./files/nx54-wan-cleanup.hotplug $(1)/etc/hotplug.d/iface/90-nx54-wan-cleanup
+	$(INSTALL_BIN) ./files/nss-sqm-ifup.hotplug $(1)/etc/hotplug.d/iface/20-nss-sqm
+	$(INSTALL_BIN) ./files/nss-rearm $(1)/usr/sbin/nss-rearm
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/net
 	$(INSTALL_BIN) ./files/nx54-wan-vlan.net $(1)/etc/hotplug.d/net/90-nx54-wan-vlan
 	$(INSTALL_DIR) $(1)/etc/init.d

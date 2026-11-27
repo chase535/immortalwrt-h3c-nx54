@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run nss-drv's data plane registration again after changing fw_mask at
+# runtime (a late arm only reaches ARMED otherwise).
+[ -w /sys/kernel/debug/qca-nss-drv/data_plane_register ] || {
+	echo "nss-rearm: qca-nss-drv/data_plane_register is missing" >&2
+	exit 1
+}
+cat /sys/kernel/debug/qca-dwmac-nss/fw_mask 2>/dev/null
+echo 1 > /sys/kernel/debug/qca-nss-drv/data_plane_register || exit 1
+echo "nss-rearm: registration triggered"

@@ -172,7 +172,7 @@ nss_dsa_tagger() {
 # Meant to run after netifd, when "up" means "configured". Sets NSS_FW_MASK
 # as 0x<hex>; never 0x0 while there is a conduit.
 nss_dsa_fw_mask() {
-	local e i n flags mask=0
+	local e i n mask=0
 	nss_dsa_conduit
 	for e in $(nss_gmac_netdevs); do
 		i="${e%%:*}"
@@ -184,8 +184,13 @@ nss_dsa_fw_mask() {
 			# GMAC carries the WAN data path and the firmware needs it too.
 			[ -n "$(nss_dsa_user_ports "$n")" ] || continue
 		else
-			flags="$(cat "/sys/class/net/$n/flags" 2>/dev/null || echo 0)"
-			[ $(( flags & 1 )) -ne 0 ] || continue
+			# Arm every standalone GMAC that has a netdev, whether or not
+			# it is up or already a bridge member.  The NX54 WAN GMAC is
+			# down (and br-wan may not exist yet) when the plane is armed:
+			# leaving it out here only works if a later hotplug re-arms it,
+			# and the registration loop has already run by then.  An idle
+			# GMAC in the mask costs nothing.
+			:
 		fi
 		mask=$(( mask | (1 << i) ))
 	done

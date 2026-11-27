@@ -1,0 +1,53 @@
+--- a/nss_stats.c
++++ b/nss_stats.c
+@@ -18,6 +18,7 @@
+  */
+ 
+ #include "nss_core.h"
++#include "nss_data_plane.h"
+ #include "nss_strings.h"
+ #include "nss_drv_stats.h"
+ 
+@@ -399,6 +400,29 @@
+  * nss_stats_init()
+  *	Enable NSS statistics.
+  */
++#if defined(NSS_DATA_PLANE_GENERIC_SUPPORT)
++/*
++ * A GMAC armed after the data plane was registered (a runtime fw_mask write)
++ * needs the registration loop run again; nss-dwmac-up writes 1 here after it
++ * arms the mask, and a manual late arm can do the same.
++ */
++static ssize_t nss_data_plane_register_write(struct file *file,
++					     const char __user *ubuf,
++					     size_t count, loff_t *ppos)
++{
++	if (nss_top_main.nss[0].state != NSS_CORE_STATE_INITIALIZED)
++		return -EAGAIN;
++
++	if (!nss_data_plane_schedule_registration())
++		return -EIO;
++
++	return count;
++}
++
++static const struct file_operations nss_data_plane_register_fops = {
++	.write = nss_data_plane_register_write,
++};
++#endif
+ void nss_stats_init(void)
+ {
+ 	struct dentry *core_dentry = NULL;
+@@ -420,6 +444,12 @@
+ 		return;
+ 	}
+ 
++#if defined(NSS_DATA_PLANE_GENERIC_SUPPORT)
++	debugfs_create_file("data_plane_register", 0200,
++			    nss_top_main.top_dentry, NULL,
++			    &nss_data_plane_register_fops);
++#endif
++
+ 	nss_top_main.stats_dentry = debugfs_create_dir("stats", nss_top_main.top_dentry);
+ 	if (unlikely(nss_top_main.stats_dentry == NULL)) {
+ 		nss_warning("Failed to create qca-nss-drv directory in debugfs");

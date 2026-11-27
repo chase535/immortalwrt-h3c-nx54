@@ -98,19 +98,34 @@ nx54_bridge_up() {
 	[ -e /sys/class/net/wan ] || return 1
 
 	if [ ! -e /sys/class/net/br-wan ]; then
-		ip link add name br-wan type bridge vlan_filtering 1 || return 1
+		ip link add name br-wan type bridge vlan_filtering 1 \
+			vlan_default_pvid 0 || return 1
 	else
 		# A bridge left over from an older boot may predate vlan_filtering.
-		ip link set br-wan type bridge vlan_filtering 1 2>/dev/null
+		ip link set br-wan type bridge vlan_filtering 1 \
+			vlan_default_pvid 0 2>/dev/null
 	fi
 	ip link set wan master br-wan 2>/dev/null
+	# Drop the kernel's automatic VLAN 1; only the WAN VID may exist.
+	bridge vlan del dev wan vid 1 2>/dev/null
 	bridge vlan add dev wan vid "$vid" pvid untagged 2>/dev/null
+	# Keep VLAN 1 out of the bridge's own table too.  The self entry for
+	# the WAN VID is added *after* br-wan.<vid> exists: creating the VLAN
+	# device already registers the VID on the bridge and adding it earlier
+	# can make the ip link add fail with EEXIST.
+	bridge vlan del dev br-wan vid 1 self 2>/dev/null
 	if [ ! -e "/sys/class/net/$wdev" ]; then
 		ip link add link br-wan name "$wdev" type vlan id "$vid" || {
 			nx54_bridge_down
 			return 1
 		}
 	fi
+	bridge vlan add dev br-wan vid "$vid" self 2>/dev/null
+	# If this was a pre-existing bridge, setting vlan_default_pvid=0 may
+	# have failed while VLAN 1 was still the PVID.  Now that VID <vid> is
+	# the port PVID, drop VLAN 1 again so only the WAN VID remains.
+	bridge vlan del dev wan vid 1 2>/dev/null
+	bridge vlan del dev br-wan vid 1 self 2>/dev/null
 	ip link set br-wan up 2>/dev/null
 	ip link set "$wdev" up 2>/dev/null
 
@@ -127,6 +142,13 @@ nx54_bridge_up() {
 		nx54_bridge_down
 		return 1
 	fi
+	if ! bridge vlan show dev br-wan 2>/dev/null |
+		awk -v v="$vid" '{for (i = 1; i <= NF; i++) if ($i == v) { ok = 1 }} END { exit !ok }'; then
+		# Without the self entry locally-terminated VID 35 traffic is not
+		# delivered to br-wan.<vid>; fall back rather than break the WAN.
+		nx54_bridge_down
+		return 1
+	fi
 	# Marker: the bridge is expected to exist.  The netdev-remove handler
 	# uses it to distinguish an external removal (recreate) from our own
 	# intentional teardown (ignore), with no timing heuristic involved.
@@ -140,3 +162,4 @@ nx54_bridge_down() {
 	ip link del br-wan 2>/dev/null
 	return 0
 }
+

@@ -281,7 +281,11 @@ start_service() {
 		[ -n "$trunk_if" ] || trunk_if=1
 		ifmap="$trunk_if:$trunk${extra:+,$extra}"
 	fi
-	insmod "/lib/modules/$(uname -r)/qca-dwmac-nss.ko" ifmap="$ifmap" 2>/dev/null ||
+	# nss.general.wan_claim=0: leave the standalone WAN on the host stack
+	# (escape hatch if claiming it breaks the br-wan/VLAN path).
+	wanarg=""
+	[ "$(uci -q get nss.general.wan_claim)" = "0" ] && wanarg="wan_ifname="
+	insmod "/lib/modules/$(uname -r)/qca-dwmac-nss.ko" ifmap="$ifmap" $wanarg 2>/dev/null ||
 		modprobe qca-dwmac-nss 2>/dev/null
 	[ -w /sys/kernel/debug/qca-dwmac-nss/ifmap ] &&
 		echo "$ifmap" > /sys/kernel/debug/qca-dwmac-nss/ifmap

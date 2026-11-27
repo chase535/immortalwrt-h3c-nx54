@@ -1,0 +1,29 @@
+#!/bin/sh
+# SQM is started at the NSS arm, before netifd brings the WAN up. When that
+# start had no interface (the WAN port was down), start the queue again when
+# the WAN section comes up. Only queues whose interface is the physical WAN
+# port are touched; nss-dwmac-up handles the rest at the arm.
+[ "$ACTION" = "ifup" ] || exit 0
+[ -x /usr/lib/sqm/run.sh ] || exit 0
+[ -f /etc/config/sqm ] || exit 0
+
+dev=$(uci -q get "network.$INTERFACE.device")
+[ -n "$dev" ] || dev=$(uci -q get "network.$INTERFACE.ifname")
+case "$dev" in
+wan|br-wan|br-wan.*) ;;
+*) exit 0 ;;
+esac
+
+lock=/var/run/nss-sqm-ifup.lock
+mkdir "$lock" 2>/dev/null || exit 0
+trap 'rmdir "$lock"' EXIT INT TERM
+
+wanport=$(ls /sys/class/net/br-wan/brif 2>/dev/null | head -n1)
+[ -n "$wanport" ] || wanport=wan
+
+for s in $(uci -q show sqm | sed -n 's/^sqm\.\([^.=]*\)=queue$/\\1/p'); do
+	[ "$(uci -q get "sqm.$s.enabled")" = "1" ] || continue
+	[ "$(uci -q get "sqm.$s.interface")" = "$wanport" ] || continue
+	[ -f "/var/run/sqm/$wanport.state" ] && continue
+	/usr/lib/sqm/run.sh start "$wanport" >/dev/null 2>&1 &
+done

@@ -18,5 +18,12 @@ set network.globals.packet_steering='0'
 set firewall.@defaults[0].flow_offloading='0'
 set firewall.@defaults[0].flow_offloading_hw='0'
 EOI
+uci commit network
+uci commit firewall
+
+# Do not overwrite an explicit setting across sysupgrade.
+[ -n "$(uci -q get nss.general.wan_claim)" ] ||
+	uci set nss.general.wan_claim='1'
+uci commit nss
 
 exit 0

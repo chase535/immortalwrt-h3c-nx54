@@ -1,0 +1,58 @@
+--- a/nss_data_plane/nss_data_plane_common.c
++++ b/nss_data_plane/nss_data_plane_common.c
+@@ -14,6 +14,7 @@
+  **************************************************************************
+  */
+ 
++#include <linux/netdevice.h>
+ #include "nss_data_plane.h"
+ #include "nss_core.h"
+ 
+@@ -68,6 +69,32 @@
+ }
+ 
+ /*
++ * A netdev that was armed after the one-time data plane registration needs
++ * the registration loop run again.  qca-dwmac-nss changes fw_mask from its
++ * notifier; this notifier only asks for the re-registration, independent of
++ * which driver changed the mask.
++ */
++static int nss_data_plane_netdev_event(struct notifier_block *nb,
++				       unsigned long event, void *ptr)
++{
++	switch (event) {
++	case NETDEV_UP:
++	case NETDEV_DOWN:
++	case NETDEV_CHANGEUPPER:
++		if (nss_top_main.nss[0].state == NSS_CORE_STATE_INITIALIZED)
++			nss_data_plane_schedule_registration();
++		break;
++	default:
++		break;
++	}
++	return NOTIFY_DONE;
++}
++
++static struct notifier_block nss_data_plane_netdev_nb = {
++	.notifier_call = nss_data_plane_netdev_event,
++};
++
++/*
+  * nss_data_plane_init_delay_work()
+  */
+ int nss_data_plane_init_delay_work(void)
+@@ -79,6 +106,7 @@
+ 	}
+ 
+ 	INIT_DELAYED_WORK(&nss_data_plane_work, nss_data_plane_work_function);
++	register_netdevice_notifier(&nss_data_plane_netdev_nb);
+ 	return 0;
+ }
+ 
+@@ -87,5 +115,6 @@
+  */
+ void nss_data_plane_destroy_delay_work(void)
+ {
++	unregister_netdevice_notifier(&nss_data_plane_netdev_nb);
+ 	destroy_workqueue(nss_data_plane_workqueue);
+ }

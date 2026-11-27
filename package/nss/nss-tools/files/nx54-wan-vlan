@@ -202,7 +202,7 @@ autoconf() {
 		fi
 		# Keep the marker in sync even if it was lost across a boot.
 		[ -e "/sys/class/net/$wdev" ] && : > /var/run/nx54-wan-vlan.expected
-		return 0
+			return 0
 		;;
 	wan)
 		# Wired WAN but no VLAN (boot without S18, or switched back from
@@ -223,10 +223,12 @@ autoconf() {
 		;;
 	esac
 
-	# Relay / WISP / other device: no bridge of ours should exist.
+	# Relay / WISP / other device: no bridge of ours should exist, and the
+	# WAN GMAC should not stay claimed by the firmware.
 	nx54_bridge_down
 	return 0
 }
+
 
 case "$1" in
 prepare) shift; prepare "$@" ;;

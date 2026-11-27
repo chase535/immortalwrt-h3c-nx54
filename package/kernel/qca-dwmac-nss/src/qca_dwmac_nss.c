@@ -71,6 +71,10 @@ MODULE_PARM_DESC(fw_if, "NSS phys_if number of that netdev = its GMAC index (def
 
 static char *ifmap = "";
 module_param(ifmap, charp, 0444);
+static char *wan_ifname = "wan";
+module_param(wan_ifname, charp, 0444);
+MODULE_PARM_DESC(wan_ifname, "standalone WAN netdev whose NSS phys_if is armed only while up or bridged");
+
 MODULE_PARM_DESC(ifmap, "netdev per NSS phys_if, '<if>:<netdev>[,<if>:<netdev>]' e.g. '1:eth1,0:wan'; overrides ifname/fw_if for the ports it names");
 
 /*
@@ -162,10 +166,14 @@ static struct dentry *dwmac_nss_dentry;
 static atomic_t dwmac_nss_rx_unexpected = ATOMIC_INIT(0);
 
 static void dwmac_nss_gate_kick(void);
+static int dwmac_nss_fw_mask_apply(unsigned long mask);
+static void (*dwmac_nss_rearm_cb)(void);
 
-/*
- * ===== firmware-side callbacks (claim owner) =====
- */
+void qca_dwmac_nss_set_rearm_cb(void (*cb)(void))
+{
+	WRITE_ONCE(dwmac_nss_rearm_cb, cb);
+}
+EXPORT_SYMBOL_GPL(qca_dwmac_nss_set_rearm_cb);
 
 static netdev_tx_t dwmac_nss_fw_xmit(struct sk_buff *skb, void *ctx)
 {
@@ -186,6 +194,42 @@ static netdev_tx_t dwmac_nss_fw_xmit(struct sk_buff *skb, void *ctx)
 	else
 		atomic64_inc(&port->tx_redirect_pkts);
 	return ret;
+}
+
+static int dwmac_nss_wan_index(void);
+
+static void dwmac_nss_wan_sync(struct net_device *netdev)
+{
+	unsigned long mask, new;
+	int i = dwmac_nss_wan_index();
+	bool want;
+
+	if (i < 0 || !netdev)
+		return;
+
+	/*
+	 * Only a WAN that is enslaved to our bridge is ours to claim.  A bare
+	 * wan that happens to be IFF_UP (relay left it up) must stay on the
+	 * host path.
+	 */
+	want = netdev_master_upper_dev_get(netdev) != NULL;
+
+	mask = READ_ONCE(dwmac_nss_fw_mask);
+	/* Nothing armed yet (the nss service writes the initial mask). */
+	if (!mask)
+		return;
+	new = want ? (mask | BIT(i)) : (mask & ~BIT(i));
+	if (new == mask)
+		return;
+
+	if (dwmac_nss_fw_mask_apply(new)) {
+		pr_warn("qca-dwmac-nss: WAN sync failed for phys_if %d\n", i);
+		return;
+	}
+
+	pr_info("qca-dwmac-nss: WAN phys_if %d %s\n", i, want ? "armed" : "disarmed");
+	if (READ_ONCE(dwmac_nss_rearm_cb))
+		dwmac_nss_rearm_cb();
 }
 
 /*
@@ -1094,6 +1138,16 @@ static ssize_t dwmac_nss_fw_mask_write(struct file *file,
 	rtnl_lock();
 	mutex_lock(&dwmac_nss_lock);
 	ret = dwmac_nss_fw_mask_apply(mask);
+	if (!ret) {
+		int wi = dwmac_nss_wan_index();
+		struct net_device *wd = wi >= 0 ?
+			dev_get_by_name(&init_net, dwmac_nss_ifnames[wi]) : NULL;
+
+		if (wd) {
+			dwmac_nss_wan_sync(wd);
+			dev_put(wd);
+		}
+	}
 	mutex_unlock(&dwmac_nss_lock);
 	rtnl_unlock();
 
@@ -1346,6 +1400,18 @@ static const struct file_operations dwmac_nss_rx_kick_fops = {
  * ===== netdev events =====
  */
 
+static int dwmac_nss_wan_index(void)
+{
+	int i;
+
+	for (i = NSS_DP_START_IFNUM; i < NSS_DP_MAX_INTERFACES; i++)
+		if (wan_ifname && wan_ifname[0] &&
+		    !strcmp(dwmac_nss_ifnames[i], wan_ifname))
+			return i;
+	return -1;
+}
+
+
 static int dwmac_nss_netdev_event(struct notifier_block *nb,
 				  unsigned long event, void *ptr)
 {
@@ -1366,6 +1432,8 @@ static int dwmac_nss_netdev_event(struct notifier_block *nb,
 	switch (event) {
 	case NETDEV_UP:
 	case NETDEV_CHANGE:
+	case NETDEV_CHANGEUPPER:
+	case NETDEV_REGISTER:
 	case NETDEV_GOING_DOWN:
 	case NETDEV_PRECHANGEMTU:
 	case NETDEV_CHANGEMTU:
@@ -1381,6 +1449,9 @@ static int dwmac_nss_netdev_event(struct notifier_block *nb,
 		return NOTIFY_DONE;
 
 	mutex_lock(&dwmac_nss_lock);
+	if (dwmac_nss_wan_index() >= 0 &&
+	    !strcmp(netdev->name, wan_ifname))
+		dwmac_nss_wan_sync(netdev);
 	port = dwmac_nss_port_by_netdev(netdev);
 	if (!port) {
 		mutex_unlock(&dwmac_nss_lock);
